@@ -17,6 +17,10 @@ use crate::{
     error::ClewdrError,
 };
 
+fn default_enabled() -> bool {
+    true
+}
+
 /// Model family for usage bucketing
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -55,6 +59,8 @@ impl<'de> Deserialize<'de> for ClewdrCookie {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CookieStatus {
     pub cookie: ClewdrCookie,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub token: Option<TokenInfo>,
     #[serde(default)]
@@ -139,6 +145,7 @@ impl CookieStatus {
         let cookie = ClewdrCookie::from_str(cookie)?;
         Ok(Self {
             cookie,
+            enabled: true,
             token: None,
             reset_time,
             count_tokens_allowed: None,

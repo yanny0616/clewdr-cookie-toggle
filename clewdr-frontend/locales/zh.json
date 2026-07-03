@@ -68,6 +68,7 @@
       "available": "可用",
       "used": "已使用{{time}}",
       "resets": "重置于{{time}}",
+      "disabled": "已关闭",
       "cooldownFull": "全局冷却",
       "cooldownOpus": "Opus 冷却",
       "cooldownSonnet": "Sonnet 冷却",
@@ -102,6 +103,13 @@
     },
     "meta": {
       "summary": "查看详情"
+    },
+    "toggle": {
+      "on": "开启",
+      "off": "关闭",
+      "saving": "...",
+      "enable": "启用这个 Cookie",
+      "disable": "关闭这个 Cookie"
     },
     "noCookies": "没有cookie",
     "deleteConfirm": "您确定要删除此cookie吗？",

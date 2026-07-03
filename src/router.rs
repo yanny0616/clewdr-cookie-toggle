@@ -96,6 +96,7 @@ impl RouterBuilder {
         let cookie_router = Router::new()
             .route("/cookies", get(api_get_cookies))
             .route("/cookie", delete(api_delete_cookie).post(api_post_cookie))
+            .route("/cookie/enabled", post(api_set_cookie_enabled))
             .with_state(self.cookie_actor_handle.to_owned());
         let admin_router = Router::new()
             .route("/auth", get(api_auth))

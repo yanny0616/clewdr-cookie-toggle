@@ -68,6 +68,7 @@
       "available": "Available",
       "used": "Used for {{time}}",
       "resets": "Resets at {{time}}",
+      "disabled": "Disabled",
       "cooldownFull": "Full cooldown",
       "cooldownOpus": "Opus cooldown",
       "cooldownSonnet": "Sonnet cooldown",
@@ -102,6 +103,13 @@
     },
     "meta": {
       "summary": "Details"
+    },
+    "toggle": {
+      "on": "On",
+      "off": "Off",
+      "saving": "...",
+      "enable": "Enable this cookie",
+      "disable": "Disable this cookie"
     },
     "noCookies": "No cookies",
     "deleteConfirm": "Are you sure you want to delete this cookie?",

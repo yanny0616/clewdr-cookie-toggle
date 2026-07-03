@@ -7,9 +7,15 @@ pub use reason::Reason;
 use serde::{Deserialize, Serialize};
 pub use usage::UsageBreakdown;
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CookieStatusApi {
     pub cookie: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub reset_time: Option<i64>,
     #[serde(default)]

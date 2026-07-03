@@ -38,6 +38,13 @@ pub struct CookieStatusQuery {
     refresh: bool,
 }
 
+/// Request body for enabling or disabling a cookie.
+#[derive(Deserialize)]
+pub struct CookieEnabledRequest {
+    cookie: String,
+    enabled: bool,
+}
+
 /// Global cache for cookie status responses (TTL: 5 minutes)
 static COOKIES_CACHE: LazyLock<Cache<String, CookieStatusCache>> = LazyLock::new(|| {
     Cache::builder()
@@ -209,6 +216,35 @@ pub async fn api_delete_cookie(
             error!("Failed to delete cookie: {}", e);
             Err(ApiError::internal(format!(
                 "Failed to delete cookie: {}",
+                e
+            )))
+        }
+    }
+}
+
+/// API endpoint to enable or disable a specific cookie.
+pub async fn api_set_cookie_enabled(
+    State(s): State<CookieActorHandle>,
+    AuthBearer(t): AuthBearer,
+    Json(req): Json<CookieEnabledRequest>,
+) -> Result<StatusCode, ApiError> {
+    if !CLEWDR_CONFIG.load().admin_auth(&t) {
+        return Err(ApiError::unauthorized());
+    }
+
+    let cookie = CookieStatus::new(&req.cookie, None)
+        .map_err(|e| ApiError::bad_request(format!("Invalid cookie: {e}")))?;
+
+    match s.set_cookie_enabled(cookie, req.enabled).await {
+        Ok(_) => {
+            COOKIES_CACHE.invalidate(COOKIE_STATUS_CACHE_KEY);
+            info!("Cookie enabled state updated");
+            Ok(StatusCode::OK)
+        }
+        Err(e) => {
+            error!("Failed to update cookie enabled state: {}", e);
+            Err(ApiError::internal(format!(
+                "Failed to update cookie enabled state: {}",
                 e
             )))
         }

@@ -42,17 +42,70 @@ fn DeleteBtn(cookie: String) -> impl IntoView {
     }
 }
 
+fn set_enabled(cookie: String, enabled: bool, saving: RwSignal<bool>) {
+    saving.set(true);
+    let refresh = expect_context::<RwSignal<u32>>();
+    spawn_local(async move {
+        let _ = api::set_cookie_enabled(&cookie, enabled).await;
+        saving.set(false);
+        refresh.update(|v| *v += 1);
+    });
+}
+
+#[component]
+fn EnableSwitch(cookie: String, enabled: bool) -> impl IntoView {
+    let i18n = use_i18n();
+    let saving = RwSignal::new(false);
+    let cookie_value = cookie.clone();
+
+    view! {
+        <button
+            type="button"
+            class=move || {
+                let state = if enabled { "on" } else { "off" };
+                format!("toggle-switch toggle-switch-{state}")
+            }
+            disabled=move || saving.get()
+            aria-pressed=enabled.to_string()
+            title=move || {
+                if enabled {
+                    i18n.t("cookieStatus.toggle.disable")
+                } else {
+                    i18n.t("cookieStatus.toggle.enable")
+                }
+            }
+            on:click=move |_| set_enabled(cookie_value.clone(), !enabled, saving)
+        >
+            <span class="toggle-knob"></span>
+            <span class="toggle-label">
+                {move || {
+                    if saving.get() {
+                        use_i18n().t("cookieStatus.toggle.saving")
+                    } else if enabled {
+                        use_i18n().t("cookieStatus.toggle.on")
+                    } else {
+                        use_i18n().t("cookieStatus.toggle.off")
+                    }
+                }}
+            </span>
+        </button>
+    }
+}
+
 #[component]
 pub fn ValidRow(cookie: CookieStatus) -> impl IntoView {
     let i18n = use_i18n();
     let cookie_str = StoredValue::new(cookie.cookie.clone());
     let masked = utils::mask_str(&cookie.cookie, 6);
     let expanded = RwSignal::new(false);
+    let enabled = cookie.enabled;
 
     let details_cookie = cookie.clone();
 
     view! {
-        <div class="cookie-row">
+        <div class=move || {
+            if enabled { "cookie-row".to_string() } else { "cookie-row cookie-row-disabled".to_string() }
+        }>
             <div class="flex-1">
                 <div class="row-sm">
                     <span
@@ -76,7 +129,16 @@ pub fn ValidRow(cookie: CookieStatus) -> impl IntoView {
                 </details>
             </div>
             <div class="row-sm">
-                <span class="text-xs text-dim">{move || use_i18n().t("cookieStatus.status.available")}</span>
+                <span class="text-xs text-dim">
+                    {move || {
+                        if enabled {
+                            use_i18n().t("cookieStatus.status.available")
+                        } else {
+                            use_i18n().t("cookieStatus.status.disabled")
+                        }
+                    }}
+                </span>
+                <EnableSwitch cookie=cookie.cookie.clone() enabled=enabled />
                 <DeleteBtn cookie=cookie.cookie />
             </div>
         </div>
@@ -87,6 +149,7 @@ pub fn ValidRow(cookie: CookieStatus) -> impl IntoView {
 pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
     let i18n = use_i18n();
     let masked = utils::mask_str(&cookie.cookie, 6);
+    let enabled = cookie.enabled;
 
     let cooldown = if let Some(ts) = cookie.reset_time {
         format!(
@@ -111,10 +174,21 @@ pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
     };
 
     view! {
-        <div class="cookie-row">
+        <div class=move || {
+            if enabled { "cookie-row".to_string() } else { "cookie-row cookie-row-disabled".to_string() }
+        }>
             <span class="text-mono text-xs truncate flex-1" style="color:#facc15">{masked}</span>
             <div class="row-sm">
-                <span class="text-xs text-dim">{cooldown}</span>
+                <span class="text-xs text-dim">
+                    {move || {
+                        if enabled {
+                            cooldown.clone()
+                        } else {
+                            use_i18n().t("cookieStatus.status.disabled")
+                        }
+                    }}
+                </span>
+                <EnableSwitch cookie=cookie.cookie.clone() enabled=enabled />
                 <DeleteBtn cookie=cookie.cookie />
             </div>
         </div>

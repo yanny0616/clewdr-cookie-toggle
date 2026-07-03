@@ -86,6 +86,14 @@ pub async fn post_cookie(cookie: &str) -> Result<(), String> {
     authed_post("/api/cookie", &serde_json::json!({ "cookie": cookie })).await
 }
 
+pub async fn set_cookie_enabled(cookie: &str, enabled: bool) -> Result<(), String> {
+    authed_post(
+        "/api/cookie/enabled",
+        &serde_json::json!({ "cookie": cookie, "enabled": enabled }),
+    )
+    .await
+}
+
 pub async fn delete_cookie(cookie: &str) -> Result<(), String> {
     let resp = Request::delete("/api/cookie")
         .header("Authorization", &auth_header())

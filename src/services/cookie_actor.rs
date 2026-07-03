@@ -39,6 +39,8 @@ enum CookieActorMessage {
     GetStatus(RpcReplyPort<CookieStatusInfo>),
     /// Delete a Cookie
     Delete(CookieStatus, RpcReplyPort<Result<(), ClewdrError>>),
+    /// Enable or disable a Cookie
+    SetEnabled(CookieStatus, bool, RpcReplyPort<Result<(), ClewdrError>>),
 }
 
 /// CookieActor state - manages collections of cookies
@@ -181,21 +183,27 @@ impl CookieActor {
         Self::reset(state);
         if let Some(hash) = hash
             && let Some(cookie) = state.moka.get(&hash)
-            && let Some(cookie) = state.valid.iter().find(|&c| c == &cookie)
+            && cookie.enabled
+            && let Some(cookie) = state.valid.iter().find(|&c| c == &cookie && c.enabled)
         {
             // renew moka cache
             state.moka.insert(hash, cookie.clone());
             return Ok(cookie.clone());
         }
-        let cookie = state
-            .valid
-            .pop_front()
-            .ok_or(ClewdrError::NoCookieAvailable)?;
-        state.valid.push_back(cookie.clone());
-        if let Some(hash) = hash {
-            state.moka.insert(hash, cookie.clone());
+        let len = state.valid.len();
+        for _ in 0..len {
+            let Some(cookie) = state.valid.pop_front() else {
+                break;
+            };
+            state.valid.push_back(cookie.clone());
+            if cookie.enabled {
+                if let Some(hash) = hash {
+                    state.moka.insert(hash, cookie.clone());
+                }
+                return Ok(cookie);
+            }
         }
-        Ok(cookie)
+        Err(ClewdrError::NoCookieAvailable)
     }
 
     /// Collects a returned cookie and processes it based on the return reason
@@ -303,6 +311,41 @@ impl CookieActor {
             })
         }
     }
+
+    /// Enables or disables a cookie without deleting its metadata.
+    fn set_enabled(
+        state: &mut CookieActorState,
+        cookie: CookieStatus,
+        enabled: bool,
+    ) -> Result<(), ClewdrError> {
+        let mut found = false;
+
+        for item in state.valid.iter_mut() {
+            if *item == cookie {
+                item.enabled = enabled;
+                found = true;
+            }
+        }
+
+        if state.exhausted.contains(&cookie)
+            && let Some(mut item) = state.exhausted.take(&cookie)
+        {
+            item.enabled = enabled;
+            state.exhausted.insert(item);
+            found = true;
+        }
+
+        if found {
+            state.moka.invalidate_all();
+            Self::save(state);
+            Self::log(state);
+            Ok(())
+        } else {
+            Err(ClewdrError::UnexpectedNone {
+                msg: "Enable operation did not find the cookie",
+            })
+        }
+    }
 }
 
 impl Actor for CookieActor {
@@ -383,6 +426,10 @@ impl Actor for CookieActor {
             }
             CookieActorMessage::Delete(cookie, reply_port) => {
                 let result = Self::delete(state, cookie.clone());
+                reply_port.send(result)?;
+            }
+            CookieActorMessage::SetEnabled(cookie, enabled, reply_port) => {
+                let result = Self::set_enabled(state, cookie, enabled);
                 reply_port.send(result)?;
             }
         }
@@ -486,6 +533,26 @@ impl CookieActorHandle {
                 loc: Location::generate(),
                 msg: format!("Failed to communicate with CookieActor for delete operation: {e}"),
             }
+        })?
+    }
+
+    /// Enable or disable a cookie in the cookie actor.
+    pub async fn set_cookie_enabled(
+        &self,
+        cookie: CookieStatus,
+        enabled: bool,
+    ) -> Result<(), ClewdrError> {
+        ractor::call!(
+            self.actor_ref,
+            CookieActorMessage::SetEnabled,
+            cookie,
+            enabled
+        )
+        .map_err(|e| ClewdrError::RactorError {
+            loc: Location::generate(),
+            msg: format!(
+                "Failed to communicate with CookieActor for enable operation: {e}"
+            ),
         })?
     }
 }
