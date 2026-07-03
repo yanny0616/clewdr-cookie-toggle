@@ -71,7 +71,6 @@
       "disabled": "已关闭",
       "cooldownFull": "全局冷却",
       "cooldownOpus": "Opus 冷却",
-      "cooldownSonnet": "Sonnet 冷却",
       "unknownReset": "未知重置时间",
       "reasons": {
         "freAccount": "免费账户",
@@ -96,7 +95,7 @@
     "quota": {
       "session": "会话配额使用",
       "sevenDay": "7日配额使用",
-      "sevenDaySonnet": "7日 Sonnet 配额使用",
+      "sevenDayFable": "7日 Fable 配额使用",
       "sevenDayOpus": "7日Opus配额使用",
       "total": "累计用量",
       "resetsAt": "重置于"

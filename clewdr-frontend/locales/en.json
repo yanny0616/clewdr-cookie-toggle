@@ -71,7 +71,6 @@
       "disabled": "Disabled",
       "cooldownFull": "Full cooldown",
       "cooldownOpus": "Opus cooldown",
-      "cooldownSonnet": "Sonnet cooldown",
       "unknownReset": "Unknown reset time",
       "reasons": {
         "freAccount": "Free account",
@@ -96,7 +95,7 @@
     "quota": {
       "session": "Session utilization",
       "sevenDay": "7-day utilization",
-      "sevenDaySonnet": "7-day Sonnet utilization",
+      "sevenDayFable": "7-day Fable utilization",
       "sevenDayOpus": "7-day Opus utilization",
       "total": "Total usage",
       "resetsAt": "Resets at"

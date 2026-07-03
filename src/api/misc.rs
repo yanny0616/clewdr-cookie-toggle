@@ -339,16 +339,16 @@ async fn augment_utilization(cookies: Vec<CookieStatus>, handle: CookieActorHand
                     five_reset,
                     seven_day,
                     seven_reset,
-                    seven_day_sonnet,
-                    sonnet_reset,
+                    seven_day_fable,
+                    fable_reset,
                 )) => {
                     let mut obj = base;
                     obj["session_utilization"] = json!(five_hour);
                     obj["session_resets_at"] = json!(five_reset);
                     obj["seven_day_utilization"] = json!(seven_day);
                     obj["seven_day_resets_at"] = json!(seven_reset);
-                    obj["seven_day_sonnet_utilization"] = json!(seven_day_sonnet);
-                    obj["seven_day_sonnet_resets_at"] = json!(sonnet_reset);
+                    obj["seven_day_fable_utilization"] = json!(seven_day_fable);
+                    obj["seven_day_fable_resets_at"] = json!(fable_reset);
                     obj
                 }
                 None => base,
@@ -421,7 +421,7 @@ type Usage = Option<(
     u32,
     Option<String>,
 )>;
-/// Extract the six usage fields from the usage JSON returned by either endpoint
+/// Extract usage fields from the usage JSON returned by either endpoint.
 fn extract_usage_fields(usage: &serde_json::Value) -> Usage {
     let five = usage
         .get("five_hour")
@@ -445,23 +445,44 @@ fn extract_usage_fields(usage: &serde_json::Value) -> Usage {
         .and_then(|o| o.get("resets_at"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let seven_sonnet = usage
-        .get("seven_day_sonnet")
-        .and_then(|o| o.get("utilization"))
-        .and_then(|v| v.as_f64())
-        .map(|v| v.round() as u32)
-        .unwrap_or(0);
-    let sonnet_reset = usage
-        .get("seven_day_sonnet")
-        .and_then(|o| o.get("resets_at"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let (seven_fable, fable_reset) = extract_scoped_weekly_usage(usage, "Fable");
     Some((
         five,
         five_reset,
         seven,
         seven_reset,
-        seven_sonnet,
-        sonnet_reset,
+        seven_fable,
+        fable_reset,
     ))
+}
+
+fn extract_scoped_weekly_usage(usage: &serde_json::Value, model_name: &str) -> (u32, Option<String>) {
+    let Some(limits) = usage.get("limits").and_then(|v| v.as_array()) else {
+        return (0, None);
+    };
+
+    let Some(limit) = limits.iter().find(|limit| {
+        limit.get("kind").and_then(|v| v.as_str()) == Some("weekly_scoped")
+            && limit
+                .get("scope")
+                .and_then(|scope| scope.get("model"))
+                .and_then(|model| model.get("display_name"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case(model_name))
+    }) else {
+        return (0, None);
+    };
+
+    let percent = limit
+        .get("percent")
+        .or_else(|| limit.get("utilization"))
+        .and_then(|v| v.as_f64())
+        .map(|v| v.round() as u32)
+        .unwrap_or(0);
+    let resets_at = limit
+        .get("resets_at")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    (percent, resets_at)
 }
