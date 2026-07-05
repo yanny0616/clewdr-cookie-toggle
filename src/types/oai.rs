@@ -78,9 +78,10 @@ impl From<CreateMessageParams> for ClaudeCreateMessageParams {
             context_management: None,
             mcp_servers: None,
             stop_sequences: params.stop,
-            thinking: params
-                .thinking
-                .or_else(|| params.reasoning_effort.map(|e| Thinking::new(e as u64))),
+            // `reasoning_effort` is an OpenAI-only compatibility hint. Do not translate it
+            // into Claude `thinking`: some Claude-backed models (for example fable)
+            // reject thinking/reasoning parameters outright.
+            thinking: params.thinking,
             temperature: params.temperature,
             stream: params.stream,
             top_k: params.top_k,
