@@ -116,8 +116,26 @@ impl ClaudeCodeState {
             p.model = stripped.to_string();
         }
         let model_family = Self::classify_model(&p.model);
-        let response = self.execute_claude_request(&access_token, &p).await?;
-        self.handle_success_response(response, model_family).await
+        let log_id = crate::services::request_log::record_start(
+            "claude_code",
+            self.api_format.to_string(),
+            &p,
+        )
+        .await;
+        self.request_log_id = Some(log_id);
+        match self.execute_claude_request(&access_token, &p).await {
+            Ok(response) => match self.handle_success_response(response, model_family).await {
+                Ok(response) => Ok(response),
+                Err(err) => {
+                    crate::services::request_log::record_error(log_id, err.to_string()).await;
+                    Err(err)
+                }
+            },
+            Err(err) => {
+                crate::services::request_log::record_error(log_id, err.to_string()).await;
+                Err(err)
+            }
+        }
     }
 
     async fn execute_claude_request(
@@ -318,9 +336,15 @@ impl ClaudeCodeState {
         model_family: ModelFamily,
     ) -> Result<axum::response::Response, ClewdrError> {
         if !self.stream {
-            let (resp, usage_pair) = Self::materialize_non_stream_response(response).await?;
-            let (input, output) = usage_pair.unwrap_or((self.usage.input_tokens as u64, 0));
+            let (resp, usage_snapshot) = Self::materialize_non_stream_response(response).await?;
+            let input = usage_snapshot
+                .input_tokens
+                .unwrap_or(self.usage.input_tokens as u64);
+            let output = usage_snapshot.output_tokens.unwrap_or(0);
             self.persist_usage_totals(input, output, model_family).await;
+            if let Some(id) = self.request_log_id {
+                crate::services::request_log::record_success(id, usage_snapshot).await;
+            }
             Ok(resp)
         } else {
             // Stream pass-through while accumulating output token usage from message_delta events
@@ -355,23 +379,46 @@ impl ClaudeCodeState {
 
         let input_tokens = self.usage.input_tokens as u64;
         let output_sum = Arc::new(AtomicU64::new(0));
+        let cache_creation_sum = Arc::new(AtomicU64::new(0));
+        let cache_read_sum = Arc::new(AtomicU64::new(0));
         let handle = self.cookie_actor_handle.clone();
         let cookie = self.cookie.clone();
+        let request_log_id = self.request_log_id;
 
         let osum = output_sum.clone();
+        let ccreate = cache_creation_sum.clone();
+        let cread = cache_read_sum.clone();
         let stream = response.bytes_stream().eventsource().map_ok(move |event| {
-            // accumulate output tokens from message_delta usage if present
+            // accumulate output/cache tokens from message_delta usage if present
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data)
+                && let Some(usage) = value.get("usage")
+            {
+                if let Some(v) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                    osum.fetch_add(v, Ordering::Relaxed);
+                }
+                if let Some(v) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    ccreate.fetch_add(v, Ordering::Relaxed);
+                }
+                if let Some(v) = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    cread.fetch_add(v, Ordering::Relaxed);
+                }
+            }
             if let Ok(parsed) =
                 serde_json::from_str::<crate::types::claude::StreamEvent>(&event.data)
             {
                 match parsed {
-                    crate::types::claude::StreamEvent::MessageDelta { usage: Some(u), .. } => {
-                        osum.fetch_add(u.output_tokens as u64, Ordering::Relaxed);
-                    }
                     crate::types::claude::StreamEvent::MessageStop => {
                         // on stream completion, persist totals asynchronously
                         if let (Some(cookie), handle) = (cookie.clone(), handle.clone()) {
                             let total_out = osum.load(Ordering::Relaxed);
+                            let cache_creation = ccreate.load(Ordering::Relaxed);
+                            let cache_read = cread.load(Ordering::Relaxed);
                             let mut c = cookie.clone();
                             tokio::spawn(async move {
                                 // Update period boundaries if needed, then accumulate
@@ -379,6 +426,18 @@ impl ClaudeCodeState {
                                     .await;
                                 c.add_and_bucket_usage(input_tokens, total_out, family);
                                 let _ = handle.return_cookie(c, None).await;
+                                if let Some(id) = request_log_id {
+                                    crate::services::request_log::record_success(
+                                        id,
+                                        crate::services::request_log::UsageSnapshot {
+                                            input_tokens: Some(input_tokens),
+                                            output_tokens: Some(total_out),
+                                            cache_creation_input_tokens: Some(cache_creation),
+                                            cache_read_input_tokens: Some(cache_read),
+                                        },
+                                    )
+                                    .await;
+                                }
                             });
                         }
                     }
@@ -402,13 +461,19 @@ impl ClaudeCodeState {
 
     async fn materialize_non_stream_response(
         response: wreq::Response,
-    ) -> Result<(axum::response::Response, Option<(u64, u64)>), ClewdrError> {
+    ) -> Result<
+        (
+            axum::response::Response,
+            crate::services::request_log::UsageSnapshot,
+        ),
+        ClewdrError,
+    > {
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = response.bytes().await.context(WreqSnafu {
             msg: "Failed to read Claude response body",
         })?;
-        let usage = Self::extract_usage_from_bytes(&bytes);
+        let usage = Self::extract_usage_from_bytes(&bytes).unwrap_or_default();
 
         let mut builder = http::Response::builder().status(status);
         for (key, value) in headers.iter() {
@@ -424,29 +489,27 @@ impl ClaudeCodeState {
         Ok((response, usage))
     }
 
-    fn extract_usage_from_bytes(bytes: &[u8]) -> Option<(u64, u64)> {
+    fn extract_usage_from_bytes(
+        bytes: &[u8],
+    ) -> Option<crate::services::request_log::UsageSnapshot> {
         // Prefer explicit usage if present
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes)
-            && let Some(usage) = value.get("usage")
-        {
-            let input = usage
-                .get("input_tokens")
-                .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|n| n.max(0) as u64)));
-            let output = usage
-                .get("output_tokens")
-                .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|n| n.max(0) as u64)));
-            if let (Some(i), Some(o)) = (input, output) {
-                return Some((i, o));
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+            let mut snapshot = crate::services::request_log::usage_from_value(&value);
+            if snapshot.input_tokens.is_some()
+                || snapshot.output_tokens.is_some()
+                || snapshot.cache_creation_input_tokens.is_some()
+                || snapshot.cache_read_input_tokens.is_some()
+            {
+                return Some(snapshot);
             }
-        }
 
-        // Fallback: estimate output tokens from the Claude response content
-        if let Ok(parsed) =
-            serde_json::from_slice::<crate::types::claude::CreateMessageResponse>(bytes)
-        {
-            let output_tokens = parsed.count_tokens() as u64;
-            // Input tokens already computed earlier and present in self.usage; only estimate output here
-            return Some((0, output_tokens));
+            // Fallback: estimate output tokens from the Claude response content
+            if let Ok(parsed) =
+                serde_json::from_value::<crate::types::claude::CreateMessageResponse>(value)
+            {
+                snapshot.output_tokens = Some(parsed.count_tokens() as u64);
+                return Some(snapshot);
+            }
         }
         None
     }

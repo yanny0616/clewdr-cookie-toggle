@@ -32,6 +32,7 @@ pub struct ClaudeCodeState {
     pub system_prompt_hash: Option<u64>,
     pub anthropic_beta_header: Option<String>,
     pub usage: Usage,
+    pub request_log_id: Option<u64>,
 }
 
 impl ClaudeCodeState {
@@ -49,6 +50,7 @@ impl ClaudeCodeState {
             system_prompt_hash: None,
             anthropic_beta_header: None,
             usage: Usage::default(),
+            request_log_id: None,
         }
     }
 

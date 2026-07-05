@@ -43,6 +43,7 @@ pub struct ClaudeWebState {
     pub usage: Usage,
     // keep the last request params for potential post-call token accounting
     pub last_params: Option<CreateMessageParams>,
+    pub request_log_id: Option<u64>,
 }
 
 impl ClaudeWebState {
@@ -63,6 +64,7 @@ impl ClaudeWebState {
             key: None,
             usage: Usage::default(),
             last_params: None,
+            request_log_id: None,
         }
     }
 

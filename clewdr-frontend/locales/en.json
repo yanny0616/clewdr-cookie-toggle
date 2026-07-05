@@ -29,7 +29,8 @@
   },
   "claudeTab": {
     "submit": "Submit Cookie",
-    "status": "Cookie Status"
+    "status": "Cookie Status",
+    "logs": "API Logs"
   },
   "cookieSubmit": {
     "value": "Cookie Value",

@@ -29,7 +29,8 @@
   },
   "claudeTab": {
     "submit": "提交Cookie",
-    "status": "Cookie状态"
+    "status": "Cookie状态",
+    "logs": "API日志"
   },
   "cookieSubmit": {
     "value": "Cookie值",

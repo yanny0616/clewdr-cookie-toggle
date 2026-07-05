@@ -4,7 +4,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{
     auth::AuthGatekeeper, config_tab::ConfigTab, cookie::CookieVisualization,
-    cookie_submit::CookieSubmitForm,
+    cookie_submit::CookieSubmitForm, request_logs::RequestLogsTab,
 };
 use crate::{
     api,
@@ -23,6 +23,7 @@ enum Tab {
 enum ClaudeSubTab {
     Submit,
     Status,
+    Logs,
 }
 
 #[component]
@@ -114,6 +115,7 @@ pub fn App() -> impl IntoView {
                                     {move || match claude_sub.get() {
                                         ClaudeSubTab::Submit => view! { <CookieSubmitForm /> }.into_any(),
                                         ClaudeSubTab::Status => view! { <CookieVisualization /> }.into_any(),
+                                        ClaudeSubTab::Logs => view! { <RequestLogsTab /> }.into_any(),
                                     }}
                                 }.into_any(),
                                 Tab::Config => view! { <ConfigTab /> }.into_any(),
@@ -262,6 +264,7 @@ fn SubTabBar(sub_tab: RwSignal<ClaudeSubTab>) -> impl IntoView {
     let tabs = [
         (ClaudeSubTab::Submit, "claudeTab.submit"),
         (ClaudeSubTab::Status, "claudeTab.status"),
+        (ClaudeSubTab::Logs, "claudeTab.logs"),
     ];
     view! {
         <div class="sub-tabs">

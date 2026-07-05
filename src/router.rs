@@ -100,7 +100,11 @@ impl RouterBuilder {
             .with_state(self.cookie_actor_handle.to_owned());
         let admin_router = Router::new()
             .route("/auth", get(api_auth))
-            .route("/config", get(api_get_config).post(api_post_config));
+            .route("/config", get(api_get_config).post(api_post_config))
+            .route(
+                "/request-logs",
+                get(api_get_request_logs).delete(api_clear_request_logs),
+            );
         let router = Router::new()
             .nest(
                 "/api",

@@ -3,6 +3,7 @@ mod claude_web;
 mod config;
 mod error;
 mod misc;
+mod request_log;
 pub use claude_code::{api_claude_code, api_claude_code_count_tokens};
 /// Message handling endpoints for creating and managing chat conversations
 pub use claude_web::api_claude_web;
@@ -14,4 +15,5 @@ pub use misc::{
     api_auth, api_delete_cookie, api_get_cookies, api_get_models, api_post_cookie,
     api_set_cookie_enabled, api_version,
 };
+pub use request_log::{api_clear_request_logs, api_get_request_logs};
 // merged above

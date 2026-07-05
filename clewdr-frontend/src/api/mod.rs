@@ -1,5 +1,5 @@
 use gloo_net::http::{Request, Response};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::{
     storage,
@@ -116,4 +116,42 @@ pub async fn get_config() -> Result<ConfigData, String> {
 
 pub async fn save_config(config: &ConfigData) -> Result<(), String> {
     authed_post("/api/config", config).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiRequestLog {
+    pub id: u64,
+    pub timestamp_ms: i64,
+    pub duration_ms: Option<i64>,
+    pub provider: String,
+    pub api_format: String,
+    pub model: String,
+    pub stream: bool,
+    pub message_count: usize,
+    pub tool_count: usize,
+    pub cache_control_breakpoints: usize,
+    pub estimated_context_tokens: u32,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+pub async fn get_request_logs(limit: usize) -> Result<Vec<ApiRequestLog>, String> {
+    authed_get(&format!("/api/request-logs?limit={limit}")).await
+}
+
+pub async fn clear_request_logs() -> Result<(), String> {
+    let resp = Request::delete("/api/request-logs")
+        .header("Authorization", &auth_header())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(extract_error(&resp).await)
+    }
 }

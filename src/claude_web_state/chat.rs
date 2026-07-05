@@ -44,6 +44,13 @@ impl ClaudeWebState {
             let p = p.to_owned();
 
             let cookie = state.request_cookie().await?;
+            let log_id = crate::services::request_log::record_start(
+                "claude_web",
+                state.api_format.to_string(),
+                &p,
+            )
+            .await;
+            state.request_log_id = Some(log_id);
             // check if request is successful
             let web_res = async {
                 state.bootstrap().await?;
@@ -58,6 +65,7 @@ impl ClaudeWebState {
                     return Ok(b);
                 }
                 Err(e) => {
+                    crate::services::request_log::record_error(log_id, e.to_string()).await;
                     error!("{e}");
                     // 429 error
                     if let ClewdrError::InvalidCookie { reason } = e {

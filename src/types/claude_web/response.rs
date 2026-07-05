@@ -207,6 +207,18 @@ impl ClaudeWebState {
         response.usage = Some(usage.clone());
         self.persist_usage_totals(usage.input_tokens as u64, output_tokens as u64)
             .await;
+        if let Some(id) = self.request_log_id {
+            crate::services::request_log::record_success(
+                id,
+                crate::services::request_log::UsageSnapshot {
+                    input_tokens: Some(usage.input_tokens as u64),
+                    output_tokens: Some(output_tokens as u64),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                },
+            )
+            .await;
+        }
         Ok(Json(response).into_response())
     }
 }
