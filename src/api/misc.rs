@@ -332,7 +332,15 @@ async fn augment_utilization(cookies: Vec<CookieStatus>, handle: CookieActorHand
     stream::iter(cookies.into_iter().map(move |cookie| {
         let handle = handle.clone();
         async move {
-            let base = serde_json::to_value(&cookie).unwrap_or(json!({}));
+            let mut base = serde_json::to_value(&cookie).unwrap_or(json!({}));
+            // CookieStatus stores reset boundaries as Unix timestamps for persistence.
+            // The frontend API contract exposes these display fields as ISO strings.
+            base["session_resets_at"] = Value::Null;
+            base["session_utilization"] = Value::Null;
+            base["seven_day_resets_at"] = Value::Null;
+            base["seven_day_utilization"] = Value::Null;
+            base["seven_day_fable_resets_at"] = Value::Null;
+            base["seven_day_fable_utilization"] = Value::Null;
             match fetch_usage_percent(cookie, handle).await {
                 Some((
                     five_hour,
