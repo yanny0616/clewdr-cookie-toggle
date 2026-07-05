@@ -160,6 +160,25 @@ fn drop_empty_system(body: &mut CreateMessageParams) {
     body.system = (!is_empty).then_some(system);
 }
 
+fn strip_unsupported_claude_params(body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+
+    for key in [
+        "reasoning_effort",
+        "frequency_penalty",
+        "presence_penalty",
+        "logprobs",
+        "top_logprobs",
+        "response_format",
+        "seed",
+        "parallel_tool_calls",
+    ] {
+        obj.remove(key);
+    }
+}
+
 fn strip_ephemeral_scope_from_system(system: &mut Value) {
     let Some(items) = system.as_array_mut() else {
         return;
@@ -261,12 +280,16 @@ where
         } else {
             ClaudeApiFormat::Claude
         };
-        let Json(mut body) = match format {
+        let mut body: CreateMessageParams = match format {
             ClaudeApiFormat::OpenAI => {
                 let Json(json) = Json::<OaiCreateMessageParams>::from_request(req, &()).await?;
-                Json(json.into())
+                json.into()
             }
-            ClaudeApiFormat::Claude => Json::<CreateMessageParams>::from_request(req, &()).await?,
+            ClaudeApiFormat::Claude => {
+                let Json(mut json) = Json::<Value>::from_request(req, &()).await?;
+                strip_unsupported_claude_params(&mut json);
+                serde_json::from_value(json).map_err(ClewdrError::from)?
+            }
         };
         if CLEWDR_CONFIG.load().sanitize_messages {
             // Trim whitespace and drop empty assistant turns when enabled.
