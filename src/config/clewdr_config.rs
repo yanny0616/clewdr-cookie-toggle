@@ -19,12 +19,15 @@ use tracing::error;
 use url::Url;
 use wreq::Proxy;
 
+use clewdr_types::RequestParamRule;
+
 use super::{CONFIG_PATH, ENDPOINT_URL};
 use crate::{
     Args,
     config::{
         CC_CLIENT_ID, CookieStatus, UselessCookie, default_check_update, default_ip,
-        default_max_retries, default_port, default_skip_cool_down, default_use_real_roles,
+        default_max_retries, default_port, default_prompt_cache_anchor_text,
+        default_request_body_archive_limit, default_skip_cool_down, default_use_real_roles,
     },
     error::ClewdrError,
     utils::enabled,
@@ -97,6 +100,16 @@ pub struct ClewdrConfig {
     pub enable_web_count_tokens: bool,
     #[serde(default)]
     pub sanitize_messages: bool,
+    #[serde(default)]
+    pub request_param_rules: Vec<RequestParamRule>,
+    #[serde(default = "default_request_body_archive_limit")]
+    pub request_body_archive_limit: usize,
+    #[serde(default)]
+    pub prompt_cache_anchor_enabled: bool,
+    #[serde(default)]
+    pub prompt_cache_anchor_models: Vec<String>,
+    #[serde(default = "default_prompt_cache_anchor_text")]
+    pub prompt_cache_anchor_text: String,
 
     // Cookie settings, can hot reload
     #[serde(default)]
@@ -156,6 +169,11 @@ impl Default for ClewdrConfig {
             web_search: false,
             enable_web_count_tokens: false,
             sanitize_messages: false,
+            request_param_rules: Vec::new(),
+            request_body_archive_limit: default_request_body_archive_limit(),
+            prompt_cache_anchor_enabled: false,
+            prompt_cache_anchor_models: Vec::new(),
+            prompt_cache_anchor_text: default_prompt_cache_anchor_text(),
             skip_first_warning: false,
             skip_second_warning: false,
             skip_restricted: false,
@@ -245,6 +263,11 @@ impl From<&ClewdrConfig> for clewdr_types::ConfigApi {
             web_search: c.web_search,
             enable_web_count_tokens: c.enable_web_count_tokens,
             sanitize_messages: c.sanitize_messages,
+            request_param_rules: c.request_param_rules.clone(),
+            request_body_archive_limit: c.request_body_archive_limit,
+            prompt_cache_anchor_enabled: c.prompt_cache_anchor_enabled,
+            prompt_cache_anchor_models: c.prompt_cache_anchor_models.clone(),
+            prompt_cache_anchor_text: c.prompt_cache_anchor_text.clone(),
             skip_first_warning: c.skip_first_warning,
             skip_second_warning: c.skip_second_warning,
             skip_restricted: c.skip_restricted,
@@ -277,6 +300,11 @@ impl From<clewdr_types::ConfigApi> for ClewdrConfig {
             web_search: c.web_search,
             enable_web_count_tokens: c.enable_web_count_tokens,
             sanitize_messages: c.sanitize_messages,
+            request_param_rules: c.request_param_rules,
+            request_body_archive_limit: c.request_body_archive_limit,
+            prompt_cache_anchor_enabled: c.prompt_cache_anchor_enabled,
+            prompt_cache_anchor_models: c.prompt_cache_anchor_models,
+            prompt_cache_anchor_text: c.prompt_cache_anchor_text,
             skip_first_warning: c.skip_first_warning,
             skip_second_warning: c.skip_second_warning,
             skip_restricted: c.skip_restricted,

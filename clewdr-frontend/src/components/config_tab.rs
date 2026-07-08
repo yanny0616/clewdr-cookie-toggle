@@ -1,8 +1,12 @@
 use leptos::{ev, prelude::*};
+use serde_json::{Map, Value};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
-use crate::{api, i18n::use_i18n, storage, types::ConfigData};
+use crate::{
+    api, i18n::use_i18n, storage,
+    types::{ConfigData, RequestParamRule},
+};
 
 #[component]
 pub fn ConfigTab() -> impl IntoView {
@@ -82,6 +86,10 @@ pub fn ConfigTab() -> impl IntoView {
                 "custom_h" => c.custom_h = if value.is_empty() { None } else { Some(value) },
                 "custom_a" => c.custom_a = if value.is_empty() { None } else { Some(value) },
                 "custom_prompt" => c.custom_prompt = value,
+                "prompt_cache_anchor_models" => {
+                    c.prompt_cache_anchor_models = parse_csv_list(&value)
+                }
+                "prompt_cache_anchor_text" => c.prompt_cache_anchor_text = value,
                 "custom_system" => {
                     c.custom_system = if value.is_empty() { None } else { Some(value) }
                 }
@@ -100,6 +108,7 @@ pub fn ConfigTab() -> impl IntoView {
                 "web_search" => c.web_search = checked,
                 "enable_web_count_tokens" => c.enable_web_count_tokens = checked,
                 "sanitize_messages" => c.sanitize_messages = checked,
+                "prompt_cache_anchor_enabled" => c.prompt_cache_anchor_enabled = checked,
                 "skip_first_warning" => c.skip_first_warning = checked,
                 "skip_second_warning" => c.skip_second_warning = checked,
                 "skip_restricted" => c.skip_restricted = checked,
@@ -205,6 +214,29 @@ pub fn ConfigTab() -> impl IntoView {
                                         <Checkbox name="enable_web_count_tokens" label=i18n.t("config.sections.api.webCountTokens") checked=cfg.enable_web_count_tokens on_input=on_checkbox />
                                         <Checkbox name="sanitize_messages" label=i18n.t("config.sections.api.sanitizeMessages") checked=cfg.sanitize_messages on_input=on_checkbox />
                                     </div>
+                                    <div class="stack" style="margin-top:0.75rem">
+                                        <div class="stack-sm">
+                                            <Checkbox name="prompt_cache_anchor_enabled" label=i18n.t("config.sections.api.promptCacheAnchorEnabled") checked=cfg.prompt_cache_anchor_enabled on_input=on_checkbox />
+                                            <div class="config-section-desc" style="margin-bottom:0">
+                                                {i18n.t("config.sections.api.promptCacheAnchorHint")}
+                                            </div>
+                                        </div>
+                                        <div class="grid-2">
+                                            <TextInput
+                                                name="prompt_cache_anchor_models"
+                                                label=i18n.t("config.sections.api.promptCacheAnchorModels")
+                                                value=join_csv_list(&cfg.prompt_cache_anchor_models)
+                                                on_input=on_input
+                                            />
+                                            <TextInput
+                                                name="prompt_cache_anchor_text"
+                                                label=i18n.t("config.sections.api.promptCacheAnchorText")
+                                                value=cfg.prompt_cache_anchor_text.clone()
+                                                on_input=on_input
+                                            />
+                                        </div>
+                                    </div>
+                                    <RequestParamRulesEditor config=config />
                                 </ConfigSection>
 
                                 // Cookie
@@ -253,6 +285,193 @@ fn ConfigSection(
     }
 }
 
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn join_csv_list(values: &[String]) -> String {
+    values.join(", ")
+}
+
+fn params_to_text(params: &Map<String, Value>) -> String {
+    if params.is_empty() {
+        "{\n}".to_string()
+    } else {
+        serde_json::to_string_pretty(params).unwrap_or_else(|_| "{\n}".to_string())
+    }
+}
+
+#[component]
+fn RequestParamRulesEditor(config: RwSignal<Option<ConfigData>>) -> impl IntoView {
+    let i18n = use_i18n();
+
+    let add_rule = move |_| {
+        config.update(|cfg| {
+            let Some(cfg) = cfg.as_mut() else { return };
+            cfg.request_param_rules.push(RequestParamRule {
+                models: vec!["claude-fable-*".to_string()],
+                exclude: Vec::new(),
+                params: Map::new(),
+            });
+        });
+    };
+
+    view! {
+        <div class="stack" style="margin-top:0.75rem">
+            <div class="row-btw">
+                <div class="stack-sm">
+                    <div class="label-sm">{move || i18n.t("config.sections.api.requestParamRules")}</div>
+                    <div class="config-section-desc" style="margin-bottom:0">
+                        {move || i18n.t("config.sections.api.requestParamRulesHint")}
+                    </div>
+                </div>
+                <button class="btn btn-ghost btn-sm" on:click=add_rule>
+                    {move || i18n.t("config.sections.api.addRule")}
+                </button>
+            </div>
+
+            <Show
+                when=move || {
+                    config
+                        .get()
+                        .is_some_and(|cfg| !cfg.request_param_rules.is_empty())
+                }
+                fallback=move || {
+                    view! {
+                        <div class="rule-empty">
+                            {move || i18n.t("config.sections.api.noRequestParamRules")}
+                        </div>
+                    }
+                }
+            >
+                <For
+                    each=move || {
+                        config
+                            .get()
+                            .map(|cfg| {
+                                cfg.request_param_rules
+                                    .iter()
+                                    .cloned()
+                                    .enumerate()
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    }
+                    key=|(index, _)| *index
+                    children=move |(index, rule)| {
+                        let on_models = move |ev: ev::Event| {
+                            let value = event_target::<HtmlInputElement>(&ev).value();
+                            config.update(|cfg| {
+                                let Some(cfg) = cfg.as_mut() else { return };
+                                let Some(rule) = cfg.request_param_rules.get_mut(index) else {
+                                    return;
+                                };
+                                rule.models = parse_csv_list(&value);
+                            });
+                        };
+
+                        let on_exclude = move |ev: ev::Event| {
+                            let value = event_target::<HtmlInputElement>(&ev).value();
+                            config.update(|cfg| {
+                                let Some(cfg) = cfg.as_mut() else { return };
+                                let Some(rule) = cfg.request_param_rules.get_mut(index) else {
+                                    return;
+                                };
+                                rule.exclude = parse_csv_list(&value);
+                            });
+                        };
+
+                        let on_params = move |ev: ev::Event| {
+                            let value = event_target::<web_sys::HtmlTextAreaElement>(&ev).value();
+                            config.update(|cfg| {
+                                let Some(cfg) = cfg.as_mut() else { return };
+                                let Some(rule) = cfg.request_param_rules.get_mut(index) else {
+                                    return;
+                                };
+                                if value.trim().is_empty() {
+                                    rule.params = Map::new();
+                                    return;
+                                }
+                                if let Ok(Value::Object(params)) = serde_json::from_str::<Value>(&value) {
+                                    rule.params = params;
+                                }
+                            });
+                        };
+
+                        let remove_rule = move |_| {
+                            config.update(|cfg| {
+                                let Some(cfg) = cfg.as_mut() else { return };
+                                if index < cfg.request_param_rules.len() {
+                                    cfg.request_param_rules.remove(index);
+                                }
+                            });
+                        };
+
+                        view! {
+                            <div class="rule-card">
+                                <div class="row-btw">
+                                    <div class="rule-title">
+                                        {move || i18n.t("config.sections.api.ruleTitle")}
+                                        {" "}
+                                        {index + 1}
+                                    </div>
+                                    <button class="btn btn-danger btn-xs" on:click=remove_rule>
+                                        {move || i18n.t("config.sections.api.removeRule")}
+                                    </button>
+                                </div>
+
+                                <div class="grid-2">
+                                    <div class="stack-sm">
+                                        <label class="label-sm">
+                                            {move || i18n.t("config.sections.api.ruleModels")}
+                                        </label>
+                                        <input
+                                            class="input input-sm"
+                                            value=join_csv_list(&rule.models)
+                                            placeholder="claude-fable-*, claude-opus-*"
+                                            on:input=on_models
+                                        />
+                                    </div>
+
+                                    <div class="stack-sm">
+                                        <label class="label-sm">
+                                            {move || i18n.t("config.sections.api.ruleExclude")}
+                                        </label>
+                                        <input
+                                            class="input input-sm"
+                                            value=join_csv_list(&rule.exclude)
+                                            placeholder="reasoning_effort, thinking, top_p"
+                                            on:input=on_exclude
+                                        />
+                                    </div>
+                                </div>
+
+                                <div class="stack-sm">
+                                    <label class="label-sm">
+                                        {move || i18n.t("config.sections.api.ruleParams")}
+                                    </label>
+                                    <textarea
+                                        class="textarea"
+                                        rows="5"
+                                        on:input=on_params
+                                    >
+                                        {params_to_text(&rule.params)}
+                                    </textarea>
+                                </div>
+                            </div>
+                        }
+                    }
+                />
+            </Show>
+        </div>
+    }
+}
+
 #[component]
 fn TextInput(
     name: &'static str,
@@ -280,6 +499,7 @@ fn TextArea(
     name: &'static str,
     label: String,
     value: String,
+    #[prop(default = "3")] rows: &'static str,
     on_input: impl Fn(ev::Event) + Copy + 'static,
 ) -> impl IntoView {
     view! {
@@ -287,7 +507,7 @@ fn TextArea(
             <label class="label-sm">{label}</label>
             <textarea
                 name=name
-                rows="3"
+                rows=rows
                 on:input=on_input
                 class="textarea"
             >

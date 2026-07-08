@@ -148,20 +148,35 @@ pub fn ValidRow(cookie: CookieStatus) -> impl IntoView {
 #[component]
 pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
     let i18n = use_i18n();
+    let cookie_str = StoredValue::new(cookie.cookie.clone());
     let masked = utils::mask_str(&cookie.cookie, 6);
+    let expanded = RwSignal::new(false);
     let enabled = cookie.enabled;
 
-    let cooldown = if let Some(ts) = cookie.reset_time {
+    let details_cookie = cookie.clone();
+    let cooldown = if let Some(ref s) = cookie.seven_day_fable_resets_at {
         format!(
             "{}: {}",
-            i18n.t("cookieStatus.status.cooldownFull"),
-            format_timestamp(ts)
+            i18n.t("cookieStatus.status.cooldownFable"),
+            format_iso(s)
         )
     } else if let Some(ref s) = cookie.seven_day_resets_at {
         format!(
             "{}: {}",
-            i18n.t("cookieStatus.status.cooldownFull"),
+            i18n.t("cookieStatus.status.cooldownSevenDay"),
             format_iso(s)
+        )
+    } else if let Some(ref s) = cookie.session_resets_at {
+        format!(
+            "{}: {}",
+            i18n.t("cookieStatus.status.cooldownSession"),
+            format_iso(s)
+        )
+    } else if let Some(ts) = cookie.reset_time {
+        format!(
+            "{}: {}",
+            i18n.t("cookieStatus.status.cooldownFull"),
+            format_timestamp(ts)
         )
     } else {
         i18n.t("cookieStatus.status.unknownReset")
@@ -171,7 +186,28 @@ pub fn ExhaustedRow(cookie: CookieStatus) -> impl IntoView {
         <div class=move || {
             if enabled { "cookie-row".to_string() } else { "cookie-row cookie-row-disabled".to_string() }
         }>
-            <span class="text-mono text-xs truncate flex-1" style="color:#facc15">{masked}</span>
+            <div class="flex-1">
+                <div class="row-sm">
+                    <span
+                        class="text-mono text-xs"
+                        style="color:#facc15; cursor:pointer"
+                        on:click=move |_| expanded.update(|e| *e = !*e)
+                    >
+                        {move || if expanded.get() { cookie_str.get_value() } else { masked.clone() }}
+                    </span>
+                    <button
+                        class="icon-copy"
+                        on:click=move |_| utils::copy_to_clipboard(cookie_str.get_value())
+                    >"📋"</button>
+                </div>
+
+                <details style="margin-top:0.25rem">
+                    <summary>{i18n.t("cookieStatus.meta.summary")}</summary>
+                    <div class="stack-sm" style="margin-top:0.5rem">
+                        <UsageDetails cookie=details_cookie />
+                    </div>
+                </details>
+            </div>
             <div class="row-sm">
                 <span class="text-xs text-dim">
                     {move || {

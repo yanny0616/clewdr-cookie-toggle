@@ -2,7 +2,7 @@ mod config;
 mod reason;
 mod usage;
 
-pub use config::ConfigApi;
+pub use config::{ConfigApi, RequestParamRule};
 pub use reason::Reason;
 use serde::{Deserialize, Serialize};
 pub use usage::UsageBreakdown;

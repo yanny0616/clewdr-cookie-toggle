@@ -179,6 +179,207 @@ fn strip_unsupported_claude_params(body: &mut Value) {
     }
 }
 
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" || pattern == value {
+        return true;
+    }
+
+    if !pattern.contains('*') {
+        return false;
+    }
+
+    let anchored_start = !pattern.starts_with('*');
+    let anchored_end = !pattern.ends_with('*');
+    let parts = pattern
+        .split('*')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return true;
+    }
+    if anchored_start && !value.starts_with(parts[0]) {
+        return false;
+    }
+    if anchored_end && !value.ends_with(parts[parts.len() - 1]) {
+        return false;
+    }
+
+    let mut rest = value;
+    for part in parts {
+        let Some(idx) = rest.find(part) else {
+            return false;
+        };
+        rest = &rest[idx + part.len()..];
+    }
+
+    true
+}
+
+fn rule_matches_model(rule_models: &[String], model: &str) -> bool {
+    rule_models.is_empty()
+        || rule_models
+            .iter()
+            .any(|pattern| wildcard_match(pattern.trim(), model))
+}
+
+fn apply_request_param_rules(body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    let Some(model) = obj.get("model").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+
+    for rule in &CLEWDR_CONFIG.load().request_param_rules {
+        if !rule_matches_model(&rule.models, &model) {
+            continue;
+        }
+
+        for (key, value) in &rule.params {
+            obj.insert(key.to_owned(), value.to_owned());
+        }
+        for key in &rule.exclude {
+            obj.remove(key);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheAnchorLocation {
+    System {
+        index: usize,
+    },
+    Message {
+        message_index: usize,
+        block_index: usize,
+    },
+}
+
+fn cache_control_value() -> Value {
+    json!({ "type": "ephemeral" })
+}
+
+fn strip_cache_control_fields(value: &mut Value) {
+    match value {
+        Value::Object(obj) => {
+            obj.remove("cache_control");
+            for child in obj.values_mut() {
+                strip_cache_control_fields(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_cache_control_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn block_text_contains_anchor(block: &Value, anchor: &str) -> bool {
+    block
+        .as_object()
+        .and_then(|obj| obj.get("text"))
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.contains(anchor))
+}
+
+fn find_cache_anchor_location(body: &Value, anchor: &str) -> Option<CacheAnchorLocation> {
+    let obj = body.as_object()?;
+
+    if let Some(system) = obj.get("system").and_then(Value::as_array) {
+        for (index, block) in system.iter().enumerate() {
+            if block_text_contains_anchor(block, anchor) {
+                return Some(CacheAnchorLocation::System { index });
+            }
+        }
+    }
+
+    let messages = obj.get("messages").and_then(Value::as_array)?;
+    for (message_index, message) in messages.iter().enumerate() {
+        let Some(content) = message
+            .as_object()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+
+        for (block_index, block) in content.iter().enumerate() {
+            if block_text_contains_anchor(block, anchor) {
+                return Some(CacheAnchorLocation::Message {
+                    message_index,
+                    block_index,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+fn insert_cache_control_at_location(body: &mut Value, location: CacheAnchorLocation) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+
+    let block = match location {
+        CacheAnchorLocation::System { index } => obj
+            .get_mut("system")
+            .and_then(Value::as_array_mut)
+            .and_then(|system| system.get_mut(index)),
+        CacheAnchorLocation::Message {
+            message_index,
+            block_index,
+        } => obj
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+            .and_then(|messages| messages.get_mut(message_index))
+            .and_then(Value::as_object_mut)
+            .and_then(|message| message.get_mut("content"))
+            .and_then(Value::as_array_mut)
+            .and_then(|content| content.get_mut(block_index)),
+    };
+
+    if let Some(block) = block.and_then(Value::as_object_mut) {
+        block.insert("cache_control".to_string(), cache_control_value());
+    }
+}
+
+fn apply_prompt_cache_anchor(body: &mut Value) {
+    let config = CLEWDR_CONFIG.load();
+    if !config.prompt_cache_anchor_enabled {
+        return;
+    }
+
+    let anchor = config.prompt_cache_anchor_text.trim().to_string();
+    let models = config.prompt_cache_anchor_models.clone();
+    drop(config);
+
+    if anchor.is_empty() {
+        return;
+    }
+
+    let Some(model) = body
+        .as_object()
+        .and_then(|obj| obj.get("model"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    if !rule_matches_model(&models, model) {
+        return;
+    }
+
+    let Some(location) = find_cache_anchor_location(body, &anchor) else {
+        return;
+    };
+
+    strip_cache_control_fields(body);
+    insert_cache_control_at_location(body, location);
+}
+
 fn strip_ephemeral_scope_from_system(system: &mut Value) {
     let Some(items) = system.as_array_mut() else {
         return;
@@ -282,12 +483,17 @@ where
         };
         let mut body: CreateMessageParams = match format {
             ClaudeApiFormat::OpenAI => {
-                let Json(json) = Json::<OaiCreateMessageParams>::from_request(req, &()).await?;
-                json.into()
+                let Json(mut json) = Json::<Value>::from_request(req, &()).await?;
+                apply_request_param_rules(&mut json);
+                serde_json::from_value::<OaiCreateMessageParams>(json)
+                    .map_err(ClewdrError::from)?
+                    .into()
             }
             ClaudeApiFormat::Claude => {
                 let Json(mut json) = Json::<Value>::from_request(req, &()).await?;
                 strip_unsupported_claude_params(&mut json);
+                apply_request_param_rules(&mut json);
+                apply_prompt_cache_anchor(&mut json);
                 serde_json::from_value(json).map_err(ClewdrError::from)?
             }
         };
@@ -495,5 +701,84 @@ mod tests {
             .map(|value| value["text"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(texts, vec!["billing", "custom system", "original system"]);
+    }
+
+    #[test]
+    fn wildcard_match_supports_exact_and_star_patterns() {
+        assert!(wildcard_match("claude-fable-5", "claude-fable-5"));
+        assert!(wildcard_match("claude-*", "claude-fable-5"));
+        assert!(wildcard_match("*fable*", "claude-fable-5"));
+        assert!(wildcard_match("claude-*5", "claude-fable-5"));
+        assert!(!wildcard_match("claude-opus-*", "claude-fable-5"));
+    }
+
+    #[test]
+    fn empty_rule_models_match_any_model() {
+        assert!(rule_matches_model(&[], "claude-fable-5"));
+        assert!(rule_matches_model(
+            &["claude-opus-*".to_string(), "claude-fable-*".to_string()],
+            "claude-fable-5"
+        ));
+        assert!(!rule_matches_model(
+            &["claude-opus-*".to_string()],
+            "claude-fable-5"
+        ));
+    }
+
+    #[test]
+    fn cache_anchor_location_finds_first_matching_text_block() {
+        let body = json!({
+            "model": "claude-fable-5",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "fixed [Start a new Chat]"},
+                    {"type": "text", "text": "later [Start a new Chat]"}
+                ]
+            }]
+        });
+
+        assert_eq!(
+            find_cache_anchor_location(&body, "[Start a new Chat]"),
+            Some(CacheAnchorLocation::Message {
+                message_index: 0,
+                block_index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn cache_anchor_rewrite_removes_existing_breakpoints_and_sets_anchor() {
+        let mut body = json!({
+            "model": "claude-fable-5",
+            "system": [{
+                "type": "text",
+                "text": "system",
+                "cache_control": {"type": "ephemeral"}
+            }],
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[Start a new Chat]"},
+                    {"type": "text", "text": "variable", "cache_control": {"type": "ephemeral"}}
+                ]
+            }]
+        });
+
+        let location = find_cache_anchor_location(&body, "[Start a new Chat]").unwrap();
+        strip_cache_control_fields(&mut body);
+        insert_cache_control_at_location(&mut body, location);
+
+        assert!(body["system"][0].get("cache_control").is_none());
+        assert!(
+            body["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_some()
+        );
+        assert!(
+            body["messages"][0]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
     }
 }

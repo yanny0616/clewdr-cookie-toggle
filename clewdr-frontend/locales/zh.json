@@ -71,6 +71,9 @@
       "resets": "重置于{{time}}",
       "disabled": "已关闭",
       "cooldownFull": "全局冷却",
+      "cooldownSession": "会话额度冷却",
+      "cooldownSevenDay": "七日额度冷却",
+      "cooldownFable": "Fable 额度冷却",
       "cooldownOpus": "Opus 冷却",
       "unknownReset": "未知重置时间",
       "reasons": {
@@ -152,7 +155,20 @@
         "preserveChats": "保留聊天",
         "webSearch": "网页搜索",
         "webCountTokens": "允许 Web 渠道调用 count_tokens",
-        "sanitizeMessages": "消息清理（去除空白）"
+        "sanitizeMessages": "消息清理（去除空白）",
+        "promptCacheAnchorEnabled": "重写 Claude 缓存点到固定块",
+        "promptCacheAnchorHint": "仅影响 Claude 原生格式。开启后会先清除请求里已有的 cache_control，再把缓存点放到匹配文本的块上；找不到文本时不会改请求。",
+        "promptCacheAnchorModels": "缓存点重写模型匹配",
+        "promptCacheAnchorText": "固定块文本",
+        "requestParamRules": "按模型追加/排除请求参数",
+        "requestParamRulesHint": "模型和排除字段用逗号分隔；追加参数填写 JSON 对象。",
+        "addRule": "新增规则",
+        "removeRule": "删除",
+        "ruleTitle": "规则",
+        "ruleModels": "模型匹配",
+        "ruleExclude": "排除字段",
+        "ruleParams": "追加/覆盖参数",
+        "noRequestParamRules": "还没有规则。"
       },
       "cookie": {
         "title": "Cookie设置",

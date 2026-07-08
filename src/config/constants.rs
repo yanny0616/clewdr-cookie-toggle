@@ -100,6 +100,15 @@ pub const fn default_max_retries() -> usize {
     5
 }
 
+/// Default number of archived request body dumps to keep.
+pub const fn default_request_body_archive_limit() -> usize {
+    50
+}
+
+pub fn default_prompt_cache_anchor_text() -> String {
+    "[Start a new Chat]".to_string()
+}
+
 /// Default IP address for the server to bind to
 ///
 /// # Returns

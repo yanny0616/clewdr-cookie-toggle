@@ -2,16 +2,22 @@ use std::{collections::VecDeque, sync::LazyLock};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use tracing::error;
 
-use crate::types::claude::{CreateMessageParams, MessageContent, Tool};
+use crate::{
+    config::{CLEWDR_CONFIG, LOG_DIR},
+    types::claude::{CreateMessageParams, MessageContent, Tool},
+};
 
 const MAX_LOGS: usize = 500;
+const REQUEST_LOG_FILE: &str = "api_request_logs.json";
 
 static REQUEST_LOGS: LazyLock<Mutex<RequestLogStore>> =
     LazyLock::new(|| Mutex::new(RequestLogStore::default()));
 
 #[derive(Default)]
 struct RequestLogStore {
+    loaded: bool,
     next_id: u64,
     logs: VecDeque<ApiRequestLog>,
 }
@@ -34,6 +40,7 @@ pub struct ApiRequestLog {
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
     pub status: RequestLogStatus,
+    pub error_code: Option<String>,
     pub error: Option<String>,
 }
 
@@ -60,6 +67,7 @@ pub async fn record_start(
     params: &CreateMessageParams,
 ) -> u64 {
     let mut store = REQUEST_LOGS.lock().await;
+    ensure_loaded(&mut store).await;
     store.next_id = store.next_id.saturating_add(1);
     let id = store.next_id;
     let log = ApiRequestLog {
@@ -80,6 +88,7 @@ pub async fn record_start(
     while store.logs.len() > MAX_LOGS {
         store.logs.pop_back();
     }
+    persist(&store).await;
     id
 }
 
@@ -101,6 +110,8 @@ pub async fn record_success(id: u64, usage: UsageSnapshot) {
 }
 
 pub async fn record_error(id: u64, error: impl Into<String>) {
+    let error = error.into();
+    let error_code = extract_error_code(&error);
     update(id, |log| {
         log.duration_ms = Some(
             chrono::Utc::now()
@@ -108,26 +119,89 @@ pub async fn record_error(id: u64, error: impl Into<String>) {
                 .saturating_sub(log.timestamp_ms),
         );
         log.status = RequestLogStatus::Error;
-        log.error = Some(error.into());
+        log.error_code = error_code;
+        log.error = Some(error);
     })
     .await;
 }
 
 pub async fn list(limit: Option<usize>) -> Vec<ApiRequestLog> {
-    let store = REQUEST_LOGS.lock().await;
+    let mut store = REQUEST_LOGS.lock().await;
+    ensure_loaded(&mut store).await;
     let limit = limit.unwrap_or(100).min(MAX_LOGS);
     store.logs.iter().take(limit).cloned().collect()
 }
 
 pub async fn clear() {
     let mut store = REQUEST_LOGS.lock().await;
+    ensure_loaded(&mut store).await;
     store.logs.clear();
+    store.next_id = 0;
+    persist(&store).await;
 }
 
 async fn update(id: u64, f: impl FnOnce(&mut ApiRequestLog)) {
     let mut store = REQUEST_LOGS.lock().await;
+    ensure_loaded(&mut store).await;
     if let Some(log) = store.logs.iter_mut().find(|log| log.id == id) {
         f(log);
+        persist(&store).await;
+    }
+}
+
+async fn ensure_loaded(store: &mut RequestLogStore) {
+    if store.loaded {
+        return;
+    }
+    store.loaded = true;
+
+    if CLEWDR_CONFIG.load().no_fs {
+        return;
+    }
+
+    let path = LOG_DIR.join(REQUEST_LOG_FILE);
+    let Ok(bytes) = tokio::fs::read(&path).await else {
+        return;
+    };
+    let Ok(mut logs) = serde_json::from_slice::<Vec<ApiRequestLog>>(&bytes) else {
+        error!("Failed to parse API request log file {}", path.display());
+        return;
+    };
+
+    logs.sort_by(|a, b| {
+        b.timestamp_ms
+            .cmp(&a.timestamp_ms)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    logs.truncate(MAX_LOGS);
+    store.next_id = logs.iter().map(|log| log.id).max().unwrap_or_default();
+    store.logs = logs.into();
+}
+
+async fn persist(store: &RequestLogStore) {
+    if CLEWDR_CONFIG.load().no_fs {
+        return;
+    }
+
+    let path = LOG_DIR.join(REQUEST_LOG_FILE);
+    if let Some(dir) = path.parent()
+        && let Err(e) = tokio::fs::create_dir_all(dir).await
+    {
+        error!("Failed to create log directory {}: {}", dir.display(), e);
+        return;
+    }
+
+    let logs = store.logs.iter().cloned().collect::<Vec<_>>();
+    let Ok(text) = serde_json::to_string_pretty(&logs) else {
+        error!("Failed to serialize API request logs");
+        return;
+    };
+    if let Err(e) = tokio::fs::write(&path, text).await {
+        error!(
+            "Failed to write API request log file {}: {}",
+            path.display(),
+            e
+        );
     }
 }
 
@@ -181,6 +255,18 @@ fn tool_has_cache_control(tool: &Tool) -> bool {
         .ok()
         .and_then(|value| value.get("cache_control").cloned())
         .is_some_and(|value| !value.is_null())
+}
+
+fn extract_error_code(error: &str) -> Option<String> {
+    for token in error.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+        if token.len() == 3
+            && token.chars().all(|ch| ch.is_ascii_digit())
+            && matches!(token.as_bytes()[0], b'4' | b'5')
+        {
+            return Some(token.to_string());
+        }
+    }
+    None
 }
 
 pub fn usage_from_value(value: &serde_json::Value) -> UsageSnapshot {

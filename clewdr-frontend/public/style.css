@@ -454,6 +454,164 @@ details summary:hover { color: var(--text-dim); }
     margin-bottom: 0.75rem;
 }
 
+.rule-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.875rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.rule-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.rule-empty {
+    padding: 0.75rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--text-mute);
+    font-size: 0.8125rem;
+    text-align: center;
+}
+
+/* ── Request logs ──────────────────────────────────────────────── */
+.log-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.log-table {
+    width: 100%;
+    min-width: 1180px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.8125rem;
+}
+
+.log-table th,
+.log-table td {
+    padding: 0.55rem 0.65rem;
+    border-bottom: 1px solid var(--divider);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.log-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--card);
+    color: var(--text-mute);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.log-table tbody tr:hover {
+    background: var(--hover);
+}
+
+.log-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.log-num {
+    text-align: right;
+    font-family: var(--mono);
+    color: var(--text-dim);
+}
+
+.log-time,
+.log-code {
+    font-family: var(--mono);
+}
+
+.log-code {
+    color: var(--warn);
+    text-align: center;
+}
+
+.log-source,
+.log-model,
+.log-error {
+    max-width: 15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.log-model {
+    font-family: var(--mono);
+    color: var(--text);
+}
+
+.log-error {
+    max-width: 18rem;
+    color: var(--text-dim);
+}
+
+.log-status,
+.log-mode {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 4.25rem;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    line-height: 1;
+}
+
+.log-status-success {
+    color: #4ade80;
+    border-color: rgba(34,197,94,0.35);
+    background: rgba(34,197,94,0.1);
+}
+
+.log-status-error {
+    color: #f87171;
+    border-color: rgba(239,68,68,0.35);
+    background: rgba(239,68,68,0.1);
+}
+
+.log-status-pending {
+    color: #facc15;
+    border-color: rgba(234,179,8,0.35);
+    background: rgba(234,179,8,0.1);
+}
+
+.log-mode {
+    min-width: 3.75rem;
+    color: var(--text-mute);
+    border-color: var(--border);
+    background: var(--input-bg);
+}
+
+.log-mode-stream {
+    color: #67e8f9;
+    border-color: rgba(6,182,212,0.35);
+    background: rgba(6,182,212,0.1);
+}
+
+.log-empty {
+    padding: 1.25rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--text-mute);
+    background: var(--overlay);
+    text-align: center;
+    font-size: 0.875rem;
+}
+
 /* ── Progress bar ──────────────────────────────────────────────── */
 .progress {
     height: 6px;

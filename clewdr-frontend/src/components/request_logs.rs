@@ -45,7 +45,7 @@ pub fn RequestLogsTab() -> impl IntoView {
                     </p>
                 </div>
                 <div class="row-sm">
-                    <button class="btn btn-secondary" disabled=move || loading.get() on:click=move |_| load()>
+                    <button class="btn btn-ghost" disabled=move || loading.get() on:click=move |_| load()>
                         {move || if loading.get() { "刷新中..." } else { "刷新" }}
                     </button>
                     <button class="btn btn-danger" disabled=move || loading.get() on:click=clear>
@@ -60,20 +60,24 @@ pub fn RequestLogsTab() -> impl IntoView {
 
             <Show
                 when=move || !logs.get().is_empty()
-                fallback=move || view! { <p class="text-dim">"还没有 API 请求记录。"</p> }
+                fallback=move || view! {
+                    <div class="log-empty">"还没有 API 请求记录。"</div>
+                }
             >
-                <div style="overflow-x:auto">
-                    <table class="usage-table" style="min-width:1040px">
+                <div class="log-table-wrap">
+                    <table class="log-table">
                         <thead>
                             <tr>
                                 <th>"ID"</th>
                                 <th>"时间"</th>
                                 <th>"状态"</th>
+                                <th>"错误代码"</th>
+                                <th>"错误信息"</th>
                                 <th>"来源"</th>
                                 <th>"格式"</th>
                                 <th>"模式"</th>
-                                <th>"消息/工具"</th>
                                 <th>"模型"</th>
+                                <th>"消息/工具"</th>
                                 <th>"上下文"</th>
                                 <th>"输入"</th>
                                 <th>"输出"</th>
@@ -81,7 +85,6 @@ pub fn RequestLogsTab() -> impl IntoView {
                                 <th>"Cache 读"</th>
                                 <th>"断点"</th>
                                 <th>"耗时"</th>
-                                <th>"错误"</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -97,34 +100,51 @@ pub fn RequestLogsTab() -> impl IntoView {
 #[component]
 fn RequestLogRow(log: api::ApiRequestLog) -> impl IntoView {
     let status_class = match log.status.as_str() {
-        "success" => "badge valid",
-        "error" => "badge exhausted",
-        _ => "badge unknown",
+        "success" => "log-status log-status-success",
+        "error" => "log-status log-status-error",
+        _ => "log-status log-status-pending",
     };
+    let error_title = log.error.clone().unwrap_or_default();
+    let error_text = empty_dash(log.error);
+    let model_title = log.model.clone();
+    let model_text = log.model;
     view! {
         <tr>
-            <td>{log.id}</td>
-            <td>{format_time(log.timestamp_ms)}</td>
+            <td class="log-num">{log.id}</td>
+            <td class="log-time">{format_time(log.timestamp_ms)}</td>
             <td><span class=status_class>{log.status}</span></td>
-            <td>{log.provider}</td>
+            <td class="log-code">{log.error_code.unwrap_or_else(|| "-".into())}</td>
+            <td class="log-error" title=error_title>
+                {error_text}
+            </td>
+            <td class="log-source">{log.provider}</td>
             <td>{log.api_format}</td>
-            <td>{if log.stream { "stream" } else { "normal" }}</td>
-            <td>{format!("{} / {}", log.message_count, log.tool_count)}</td>
-            <td style="max-width:220px; white-space:normal">{log.model}</td>
-            <td>{format_num(Some(log.estimated_context_tokens as u64))}</td>
-            <td>{format_num(log.input_tokens)}</td>
-            <td>{format_num(log.output_tokens)}</td>
-            <td>{format_num(log.cache_creation_input_tokens)}</td>
-            <td>{format_num(log.cache_read_input_tokens)}</td>
-            <td>{log.cache_control_breakpoints}</td>
-            <td>{log.duration_ms.map(|v| format!("{v}ms")).unwrap_or_else(|| "-".into())}</td>
-            <td style="max-width:260px; white-space:normal">{log.error.unwrap_or_default()}</td>
+            <td>
+                <span class=if log.stream { "log-mode log-mode-stream" } else { "log-mode" }>
+                    {if log.stream { "stream" } else { "normal" }}
+                </span>
+            </td>
+            <td class="log-model" title=model_title>{model_text}</td>
+            <td class="log-num">{format!("{} / {}", log.message_count, log.tool_count)}</td>
+            <td class="log-num">{format_num(Some(log.estimated_context_tokens as u64))}</td>
+            <td class="log-num">{format_num(log.input_tokens)}</td>
+            <td class="log-num">{format_num(log.output_tokens)}</td>
+            <td class="log-num">{format_num(log.cache_creation_input_tokens)}</td>
+            <td class="log-num">{format_num(log.cache_read_input_tokens)}</td>
+            <td class="log-num">{log.cache_control_breakpoints}</td>
+            <td class="log-num">{log.duration_ms.map(|v| format!("{v}ms")).unwrap_or_else(|| "-".into())}</td>
         </tr>
     }
 }
 
 fn format_num(value: Option<u64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "-".into())
+}
+
+fn empty_dash(value: Option<String>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "-".into())
 }
 
 fn format_time(timestamp_ms: i64) -> String {

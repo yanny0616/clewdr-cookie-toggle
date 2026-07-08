@@ -71,6 +71,9 @@
       "resets": "Resets at {{time}}",
       "disabled": "Disabled",
       "cooldownFull": "Full cooldown",
+      "cooldownSession": "Session quota cooldown",
+      "cooldownSevenDay": "Seven-day quota cooldown",
+      "cooldownFable": "Fable quota cooldown",
       "cooldownOpus": "Opus cooldown",
       "unknownReset": "Unknown reset time",
       "reasons": {
@@ -152,7 +155,20 @@
         "preserveChats": "Preserve Chats",
         "webSearch": "Web Search",
         "webCountTokens": "Enable web count_tokens",
-        "sanitizeMessages": "Sanitize messages (trim whitespace)"
+        "sanitizeMessages": "Sanitize messages (trim whitespace)",
+        "promptCacheAnchorEnabled": "Rewrite Claude cache breakpoint to fixed block",
+        "promptCacheAnchorHint": "Claude native format only. When enabled, existing cache_control fields are cleared and one breakpoint is placed on the matching text block; requests are unchanged if the text is not found.",
+        "promptCacheAnchorModels": "Cache rewrite model match",
+        "promptCacheAnchorText": "Fixed block text",
+        "requestParamRules": "Per-model request parameter rules",
+        "requestParamRulesHint": "Separate models and excluded fields with commas; additional parameters use a JSON object.",
+        "addRule": "Add rule",
+        "removeRule": "Delete",
+        "ruleTitle": "Rule",
+        "ruleModels": "Model match",
+        "ruleExclude": "Excluded fields",
+        "ruleParams": "Added/overridden parameters",
+        "noRequestParamRules": "No rules yet."
       },
       "cookie": {
         "title": "Cookie Settings",

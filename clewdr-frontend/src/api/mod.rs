@@ -136,6 +136,7 @@ pub struct ApiRequestLog {
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
     pub status: String,
+    pub error_code: Option<String>,
     pub error: Option<String>,
 }
 
