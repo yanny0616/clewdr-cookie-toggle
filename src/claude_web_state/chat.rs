@@ -1,5 +1,5 @@
 use colored::Colorize;
-use futures::TryFutureExt;
+
 use serde_json::json;
 use snafu::ResultExt;
 use tracing::{Instrument, debug, error, info, info_span};
@@ -42,6 +42,7 @@ impl ClaudeWebState {
             }
             let mut state = self.to_owned();
             let p = p.to_owned();
+            let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
             let cookie = state.request_cookie().await?;
             let log_id = crate::services::request_log::record_start(
@@ -51,14 +52,12 @@ impl ClaudeWebState {
             )
             .await;
             state.request_log_id = Some(log_id);
-            // check if request is successful
-            let web_res = async {
+            let transform_res = async {
                 state.bootstrap().await?;
-                state.send_chat(p).await
-            };
-            let transform_res = web_res
-                .and_then(async |r| self.transform_response(r).await)
-                .instrument(info_span!("claude_web", "cookie" = cookie.cookie.mask()));
+                let response = state.send_chat(p).await?;
+                state.transform_response(response).await
+            }
+            .instrument(info_span!("claude_web", "cookie" = cookie.cookie.mask()));
 
             match transform_res.await {
                 Ok(b) => {
@@ -67,8 +66,16 @@ impl ClaudeWebState {
                 Err(e) => {
                     crate::services::request_log::record_error(log_id, e.to_string()).await;
                     error!("{e}");
-                    // 429 error
+                    // 429 error. Fable has its own scoped quota; do not mark the whole
+                    // cookie exhausted when only Fable is cooling down, otherwise Sonnet/Opus
+                    // requests incorrectly see "No cookie available".
                     if let ClewdrError::InvalidCookie { reason } = e {
+                        if matches!(reason, crate::config::Reason::TooManyRequest(_))
+                            && is_fable_request
+                        {
+                            state.return_cookie(None).await;
+                            return Err(ClewdrError::InvalidCookie { reason });
+                        }
                         state.return_cookie(Some(reason.to_owned())).await;
                         continue;
                     }

@@ -203,6 +203,10 @@ impl IntoResponse for ClewdrError {
                 (source.status(), json!(source.body_text()))
             }
             ClewdrError::TooManyRetries => (StatusCode::GATEWAY_TIMEOUT, json!(self.to_string())),
+            ClewdrError::NoCookieAvailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!("No available Claude cookie/session: all matching accounts are disabled, invalid, exhausted, or cooling down"),
+            ),
             ClewdrError::InvalidCookie { .. } => (StatusCode::BAD_REQUEST, json!(self.to_string())),
             ClewdrError::PathNotFound { .. } => (StatusCode::NOT_FOUND, json!(self.to_string())),
             ClewdrError::InvalidAuth => (StatusCode::UNAUTHORIZED, json!(self.to_string())),

@@ -51,6 +51,7 @@ impl ClaudeCodeState {
             }
             let mut state = self.to_owned();
             let p = p.to_owned();
+            let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
             let cookie = state.request_cookie().await?;
             let retry = async {
@@ -95,8 +96,16 @@ impl ClaudeCodeState {
                         state.cookie.as_ref().unwrap().cookie.mask().green(),
                         e
                     );
-                    // 429 error
+                    // 429 error. Fable has its own scoped quota; do not mark the whole
+                    // cookie exhausted when only Fable is cooling down, otherwise Sonnet/Opus
+                    // requests incorrectly see "No cookie available".
                     if let ClewdrError::InvalidCookie { reason } = e {
+                        if matches!(reason, crate::config::Reason::TooManyRequest(_))
+                            && is_fable_request
+                        {
+                            state.return_cookie(None).await;
+                            return Err(ClewdrError::InvalidCookie { reason });
+                        }
                         state.return_cookie(Some(reason.to_owned())).await;
                         continue;
                     }
@@ -235,6 +244,7 @@ impl ClaudeCodeState {
             }
             let mut state = self.to_owned();
             let p = p.to_owned();
+            let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
             let cookie = state.request_cookie().await?;
             let web_attempt_allowed = CLEWDR_CONFIG.load().enable_web_count_tokens;
@@ -288,6 +298,12 @@ impl ClaudeCodeState {
                         e
                     );
                     if let ClewdrError::InvalidCookie { reason } = e {
+                        if matches!(reason, crate::config::Reason::TooManyRequest(_))
+                            && is_fable_request
+                        {
+                            state.return_cookie(None).await;
+                            return Err(ClewdrError::InvalidCookie { reason });
+                        }
                         state.return_cookie(Some(reason.to_owned())).await;
                         continue;
                     }

@@ -88,6 +88,7 @@ impl ClaudeWebState {
             let endpoint = self.endpoint.clone();
             let proxy = self.proxy.clone();
             let client = self.client.clone();
+            let request_log_id = self.request_log_id;
             // try to get precise input tokens via Claude Code count_tokens if enabled
             if crate::config::CLEWDR_CONFIG.load().enable_web_count_tokens
                 && let Some(tokens) = self.try_code_count_tokens().await
@@ -113,7 +114,7 @@ impl ClaudeWebState {
                     yield e.data(event.data);
                 }
                 // on end of stream, compute output tokens and persist totals
-                if !acc.is_empty() {
+                let out = if !acc.is_empty() {
                     // Prefer official count_tokens if enabled and possible; else estimate locally
                     let mut out = None;
                     if enable_precise
@@ -124,31 +125,16 @@ impl ClaudeWebState {
                             model, acc.clone(), handle.clone()
                         ).await.map(|v| v as u64);
                     }
-                    let out = out.unwrap_or_else(|| {
+                    Some(out.unwrap_or_else(|| {
                         let usage = crate::types::claude::Usage { input_tokens: input_tokens as u32, output_tokens: 0 };
                         let resp = crate::types::claude::CreateMessageResponse::text(acc.clone(), Default::default(), usage);
                         resp.count_tokens() as u64
-                    });
-                    if let Some(mut c) = cookie.clone() {
-                        let family = last_params
-                            .as_ref()
-                            .map(|p| p.model.as_str())
-                            .map(|m| {
-                                let m = m.to_ascii_lowercase();
-                                if m.contains("opus") {
-                                    crate::config::ModelFamily::Opus
-                                } else if m.contains("sonnet") {
-                                    crate::config::ModelFamily::Sonnet
-                                } else {
-                                    crate::config::ModelFamily::Other
-                                }
-                            })
-                            .unwrap_or(crate::config::ModelFamily::Other);
-                        c.add_and_bucket_usage(input_tokens, out, family);
-                        let _ = handle.return_cookie(c, None).await;
-                    }
-                } else if let Some(mut c) = cookie.clone() {
-                    // still persist input tokens to maintain parity
+                    }))
+                } else {
+                    Some(0)
+                };
+                let output_tokens = out.unwrap_or(0);
+                if let Some(mut c) = cookie.clone() {
                     let family = last_params
                         .as_ref()
                         .map(|p| p.model.as_str())
@@ -163,8 +149,20 @@ impl ClaudeWebState {
                             }
                         })
                         .unwrap_or(crate::config::ModelFamily::Other);
-                    c.add_and_bucket_usage(input_tokens, 0, family);
+                    c.add_and_bucket_usage(input_tokens, output_tokens, family);
                     let _ = handle.return_cookie(c, None).await;
+                }
+                if let Some(id) = request_log_id {
+                    crate::services::request_log::record_success(
+                        id,
+                        crate::services::request_log::UsageSnapshot {
+                            input_tokens: Some(input_tokens),
+                            output_tokens: Some(output_tokens),
+                            cache_creation_input_tokens: None,
+                            cache_read_input_tokens: None,
+                        },
+                    )
+                    .await;
                 }
             };
             // normalize error type for axum SSE

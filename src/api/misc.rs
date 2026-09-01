@@ -276,9 +276,12 @@ pub async fn api_auth(AuthBearer(t): AuthBearer) -> StatusCode {
 }
 
 const MODEL_LIST: &[&str] = &[
+    "claude-fable-5-1",
     "claude-fable-5",
+    "claude-mythos-5-1",
     "claude-mythos-5",
     "claude-sonnet-5",
+    "claude-opus-5",
     "claude-opus-4-8",
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
