@@ -612,6 +612,38 @@ details summary:hover { color: var(--text-dim); }
     font-size: 0.875rem;
 }
 
+.log-heading { align-items: center; gap: 1rem; }
+.log-heading h3 { margin: 0 0 .35rem; }
+.log-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: .65rem; }
+.log-stat { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: 1rem; border: 1px solid var(--card-border); border-radius: var(--radius); background: var(--surface); color: var(--text-dim); cursor: pointer; }
+.log-stat strong { font-size: 1.3rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.log-stat.active { border-color: var(--text-dim); background: var(--hover); }
+.log-search { width: 100%; box-sizing: border-box; }
+.log-list { display: grid; gap: .55rem; }
+.log-entry { border: 1px solid var(--card-border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.log-entry summary { padding: 1rem 1.1rem; cursor: pointer; list-style: none; }
+.log-entry summary::-webkit-details-marker { display: none; }
+.log-entry summary:hover { background: var(--hover); }
+.log-entry summary:focus-visible, .log-stat:focus-visible { outline: 2px solid var(--text-dim); outline-offset: -2px; }
+.log-entry-main { display: flex; align-items: center; gap: .75rem; }
+.log-entry-model { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.log-entry-duration { margin-left: auto; font-family: var(--mono); white-space: nowrap; color: var(--text-dim); font-size: .85rem; }
+.log-entry-meta { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-top: .65rem; color: var(--text-mute); font-size: .75rem; }
+.log-entry-error { margin: .7rem 0 0; color: var(--danger); font-size: .8rem; overflow-wrap: anywhere; }
+.log-entry-details { padding: 1rem 1.1rem; border-top: 1px solid var(--divider); }
+.log-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin: 0; }
+.log-metrics dt { color: var(--text-mute); font-size: .75rem; }
+.log-metrics dd { margin: .3rem 0 0; font-family: var(--mono); font-size: .85rem; overflow-wrap: anywhere; }
+.log-error-detail { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow-y: auto; background: var(--input-bg); border-radius: var(--radius-sm); padding: .85rem; font-size: .8rem; color: var(--text-dim); }
+.log-status-muted { color: var(--text-mute); border-color: var(--border); background: var(--input-bg); }
+@media (max-width: 600px) {
+    .log-overview { gap: .4rem; }
+    .log-stat { flex-direction: column; padding: .7rem .3rem; font-size: .75rem; }
+    .log-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .log-entry summary { padding: .85rem; }
+    .log-entry-main { gap: .45rem; font-size: .85rem; }
+}
+
 /* ── Progress bar ──────────────────────────────────────────────── */
 .progress {
     height: 6px;

@@ -88,6 +88,11 @@ pub enum ClewdrError {
     BadRequest { msg: &'static str },
     #[snafu(display("Retries exceeded"))]
     TooManyRetries,
+    #[snafu(display(
+        "Clewdr request exceeded {} seconds while waiting for upstream completion (including authentication and retries)",
+        seconds
+    ))]
+    RequestTimeout { seconds: u64 },
     #[snafu(display("EventSource error: {}", source))]
     #[snafu(context(false))]
     EventSourceAxumError {
@@ -203,9 +208,14 @@ impl IntoResponse for ClewdrError {
                 (source.status(), json!(source.body_text()))
             }
             ClewdrError::TooManyRetries => (StatusCode::GATEWAY_TIMEOUT, json!(self.to_string())),
+            ClewdrError::RequestTimeout { .. } => {
+                (StatusCode::GATEWAY_TIMEOUT, json!(self.to_string()))
+            }
             ClewdrError::NoCookieAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                json!("No available Claude cookie/session: all matching accounts are disabled, invalid, exhausted, or cooling down"),
+                json!(
+                    "No available Claude cookie/session: all matching accounts are disabled, invalid, exhausted, or cooling down"
+                ),
             ),
             ClewdrError::InvalidCookie { .. } => (StatusCode::BAD_REQUEST, json!(self.to_string())),
             ClewdrError::PathNotFound { .. } => (StatusCode::NOT_FOUND, json!(self.to_string())),

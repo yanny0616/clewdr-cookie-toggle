@@ -45,13 +45,6 @@ impl ClaudeWebState {
             let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
             let cookie = state.request_cookie().await?;
-            let log_id = crate::services::request_log::record_start(
-                "claude_web",
-                state.api_format.to_string(),
-                &p,
-            )
-            .await;
-            state.request_log_id = Some(log_id);
             let transform_res = async {
                 state.bootstrap().await?;
                 let response = state.send_chat(p).await?;
@@ -64,7 +57,6 @@ impl ClaudeWebState {
                     return Ok(b);
                 }
                 Err(e) => {
-                    crate::services::request_log::record_error(log_id, e.to_string()).await;
                     error!("{e}");
                     // 429 error. Fable has its own scoped quota; do not mark the whole
                     // cookie exhausted when only Fable is cooling down, otherwise Sonnet/Opus

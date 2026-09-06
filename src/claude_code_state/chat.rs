@@ -125,26 +125,8 @@ impl ClaudeCodeState {
             p.model = stripped.to_string();
         }
         let model_family = Self::classify_model(&p.model);
-        let log_id = crate::services::request_log::record_start(
-            "claude_code",
-            self.api_format.to_string(),
-            &p,
-        )
-        .await;
-        self.request_log_id = Some(log_id);
-        match self.execute_claude_request(&access_token, &p).await {
-            Ok(response) => match self.handle_success_response(response, model_family).await {
-                Ok(response) => Ok(response),
-                Err(err) => {
-                    crate::services::request_log::record_error(log_id, err.to_string()).await;
-                    Err(err)
-                }
-            },
-            Err(err) => {
-                crate::services::request_log::record_error(log_id, err.to_string()).await;
-                Err(err)
-            }
-        }
+        let response = self.execute_claude_request(&access_token, &p).await?;
+        self.handle_success_response(response, model_family).await
     }
 
     async fn execute_claude_request(
@@ -388,88 +370,45 @@ impl ClaudeCodeState {
         response: wreq::Response,
         family: ModelFamily,
     ) -> Result<axum::response::Response, ClewdrError> {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicU64, Ordering},
-        };
-
-        let input_tokens = self.usage.input_tokens as u64;
-        let output_sum = Arc::new(AtomicU64::new(0));
-        let cache_creation_sum = Arc::new(AtomicU64::new(0));
-        let cache_read_sum = Arc::new(AtomicU64::new(0));
-        let handle = self.cookie_actor_handle.clone();
-        let cookie = self.cookie.clone();
-        let request_log_id = self.request_log_id;
-
-        let osum = output_sum.clone();
-        let ccreate = cache_creation_sum.clone();
-        let cread = cache_read_sum.clone();
-        let stream = response.bytes_stream().eventsource().map_ok(move |event| {
-            // accumulate output/cache tokens from message_delta usage if present
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data)
-                && let Some(usage) = value.get("usage")
-            {
-                if let Some(v) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
-                    osum.fetch_add(v, Ordering::Relaxed);
-                }
-                if let Some(v) = usage
-                    .get("cache_creation_input_tokens")
-                    .and_then(|v| v.as_u64())
-                {
-                    ccreate.fetch_add(v, Ordering::Relaxed);
-                }
-                if let Some(v) = usage
-                    .get("cache_read_input_tokens")
-                    .and_then(|v| v.as_u64())
-                {
-                    cread.fetch_add(v, Ordering::Relaxed);
-                }
-            }
-            if let Ok(parsed) =
-                serde_json::from_str::<crate::types::claude::StreamEvent>(&event.data)
-            {
-                match parsed {
-                    crate::types::claude::StreamEvent::MessageStop => {
-                        // on stream completion, persist totals asynchronously
-                        if let (Some(cookie), handle) = (cookie.clone(), handle.clone()) {
-                            let total_out = osum.load(Ordering::Relaxed);
-                            let cache_creation = ccreate.load(Ordering::Relaxed);
-                            let cache_read = cread.load(Ordering::Relaxed);
-                            let mut c = cookie.clone();
-                            tokio::spawn(async move {
-                                // Update period boundaries if needed, then accumulate
-                                ClaudeCodeState::update_cookie_boundaries_if_due(&mut c, &handle)
-                                    .await;
-                                c.add_and_bucket_usage(input_tokens, total_out, family);
-                                let _ = handle.return_cookie(c, None).await;
-                                if let Some(id) = request_log_id {
-                                    crate::services::request_log::record_success(
-                                        id,
-                                        crate::services::request_log::UsageSnapshot {
-                                            input_tokens: Some(input_tokens),
-                                            output_tokens: Some(total_out),
-                                            cache_creation_input_tokens: Some(cache_creation),
-                                            cache_read_input_tokens: Some(cache_read),
-                                        },
-                                    )
-                                    .await;
-                                }
-                            });
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // mirror upstream SSE event unchanged
-            let e = SseEvent::default().event(event.event).id(event.id);
-            let e = if let Some(retry) = event.retry {
-                e.retry(retry)
-            } else {
-                e
+        let mut state = self.clone();
+        let stream = async_stream::try_stream! {
+            let upstream = response.bytes_stream().eventsource();
+            futures::pin_mut!(upstream);
+            let mut usage = crate::services::request_log::UsageSnapshot {
+                input_tokens: Some(state.usage.input_tokens as u64),
+                ..Default::default()
             };
-            e.data(event.data)
-        });
-
+            let mut stopped = false;
+            while let Some(event) = upstream.try_next().await.map_err(std::io::Error::other)? {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                    if event.event == "error" || value.get("type").and_then(|v| v.as_str()) == Some("error") {
+                        Err(std::io::Error::other(format!("Claude upstream stream error: {}", event.data)))?;
+                    }
+                    let snapshot = value.get("usage").or_else(|| value.get("message").and_then(|m| m.get("usage")));
+                    if let Some(snapshot) = snapshot {
+                        // Claude usage counters are cumulative, not deltas.
+                        if let Some(v) = snapshot.get("input_tokens").and_then(|v| v.as_u64()) { usage.input_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("output_tokens").and_then(|v| v.as_u64()) { usage.output_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("cache_creation_input_tokens").and_then(|v| v.as_u64()) { usage.cache_creation_input_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("cache_read_input_tokens").and_then(|v| v.as_u64()) { usage.cache_read_input_tokens = Some(v); }
+                    }
+                    stopped |= value.get("type").and_then(|v| v.as_str()) == Some("message_stop");
+                }
+                stopped |= event.event == "message_stop";
+                let e = SseEvent::default().event(event.event).id(event.id);
+                let e = if let Some(retry) = event.retry { e.retry(retry) } else { e };
+                yield e.data(event.data);
+            }
+            if !stopped {
+                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof,
+                    "Claude upstream stream ended before message_stop"))?;
+            }
+            state.persist_usage_totals(usage.input_tokens.unwrap_or(0), usage.output_tokens.unwrap_or(0), family).await;
+            if let Some(id) = state.request_log_id {
+                crate::services::request_log::record_success(id, usage).await;
+            }
+        };
+        let stream = stream.map_err(|e: std::io::Error| -> axum::BoxError { e.into() });
         Ok(Sse::new(stream)
             .keep_alive(Default::default())
             .into_response())

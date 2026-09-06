@@ -132,7 +132,18 @@ impl LLMProvider for ClaudeWebProvider {
         );
         print_out_json(&params, "claude_web_client_req.json");
         let stopwatch = Instant::now();
-        let response = state.try_chat(params).await?;
+        let id = crate::services::request_log::record_start(
+            "claude_web",
+            state.api_format.to_string(),
+            &params,
+        )
+        .await;
+        state.request_log_id = Some(id);
+        let response = crate::services::request_log::track_response(
+            crate::services::request_log::RequestGuard(id),
+            state.try_chat(params),
+        )
+        .await?;
         let elapsed = stopwatch.elapsed();
         info!(
             "[FIN] elapsed: {}s",
@@ -185,7 +196,18 @@ impl LLMProvider for ClaudeCodeProvider {
                 );
                 print_out_json(&params, "claude_code_client_req.json");
                 let stopwatch = Instant::now();
-                let response = state.try_chat(params).await?;
+                let id = crate::services::request_log::record_start(
+                    "claude_code",
+                    state.api_format.to_string(),
+                    &params,
+                )
+                .await;
+                state.request_log_id = Some(id);
+                let response = crate::services::request_log::track_response(
+                    crate::services::request_log::RequestGuard(id),
+                    state.try_chat(params),
+                )
+                .await?;
                 let elapsed = stopwatch.elapsed();
                 info!(
                     "[FIN] elapsed: {}s",

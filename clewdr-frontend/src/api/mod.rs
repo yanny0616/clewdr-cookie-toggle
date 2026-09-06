@@ -118,7 +118,7 @@ pub async fn save_config(config: &ConfigData) -> Result<(), String> {
     authed_post("/api/config", config).await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq)]
 pub struct ApiRequestLog {
     pub id: u64,
     pub timestamp_ms: i64,
