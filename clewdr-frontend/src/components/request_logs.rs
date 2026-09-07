@@ -127,6 +127,13 @@ fn RequestLogRow(log: api::ApiRequestLog, now: RwSignal<i64>) -> impl IntoView {
     let duration = log.duration_ms;
     let error = log.error.clone().unwrap_or_default();
     let summary = error.chars().take(180).collect::<String>();
+    // Claude reports ordinary input and cache input as disjoint counters.
+    // Keep the raw API fields intact; combine them only for display.
+    let total_input = log.input_tokens.map(|input| {
+        input
+            .saturating_add(log.cache_creation_input_tokens.unwrap_or(0))
+            .saturating_add(log.cache_read_input_tokens.unwrap_or(0))
+    });
     view! {
         <details class="log-entry">
             <summary>
@@ -142,14 +149,13 @@ fn RequestLogRow(log: api::ApiRequestLog, now: RwSignal<i64>) -> impl IntoView {
                     <span>{format_time(timestamp)}</span><span>{format!("#{}", log.id)}</span>
                     <span>{if log.stream { "流式" } else { "非流式" }}</span>
                     <span>{format!("{} · {}", log.provider, log.api_format)}</span>
-                    <span>{format!("输入 {} / 输出 {}", format_num(log.input_tokens), format_num(log.output_tokens))}</span>
+                    <span>{format!("输入 {} / 输出 {}", format_num(total_input), format_num(log.output_tokens))}</span>
                 </div>
                 {(!error.is_empty()).then(|| view! { <p class="log-entry-error">{summary}</p> })}
             </summary>
             <div class="log-entry-details">
                 <dl class="log-metrics">
-                    <div><dt>"估算上下文"</dt><dd>{format_num(Some(log.estimated_context_tokens as u64))}</dd></div>
-                    <div><dt>"输入 tokens"</dt><dd>{format_num(log.input_tokens)}</dd></div>
+                    <div><dt>"输入 tokens（含缓存）"</dt><dd>{format_num(total_input)}</dd></div>
                     <div><dt>"输出 tokens"</dt><dd>{format_num(log.output_tokens)}</dd></div>
                     <div><dt>"缓存写入"</dt><dd>{format_num(log.cache_creation_input_tokens)}</dd></div>
                     <div><dt>"缓存读取"</dt><dd>{format_num(log.cache_read_input_tokens)}</dd></div>
@@ -157,6 +163,10 @@ fn RequestLogRow(log: api::ApiRequestLog, now: RwSignal<i64>) -> impl IntoView {
                     <div><dt>"消息 / 工具"</dt><dd>{format!("{} / {}", log.message_count, log.tool_count)}</dd></div>
                     <div><dt>"错误代码"</dt><dd>{log.error_code.unwrap_or_else(|| "—".into())}</dd></div>
                 </dl>
+                {total_input.is_none().then(|| view! {
+                    <p class="text-dim text-sm">{format!("本地文本估算：{} tokens（尚无输入用量，仅供参考）", log.estimated_context_tokens)}</p>
+                })}
+                <p class="text-dim text-sm">"缓存写入和读取已包含在输入中，无需重复相加。"</p>
                 {(!error.is_empty()).then(|| view! { <pre class="log-error-detail">{error}</pre> })}
             </div>
         </details>
