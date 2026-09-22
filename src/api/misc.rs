@@ -281,6 +281,7 @@ const MODEL_LIST: &[&str] = &[
     "claude-mythos-5-1",
     "claude-mythos-5",
     "claude-sonnet-5",
+    "claude-opus-5-5",
     "claude-opus-5",
     "claude-opus-4-8",
     "claude-haiku-4-5-20251001",
@@ -322,6 +323,23 @@ pub async fn api_get_models() -> Json<Value> {
         "object": "list",
         "data": data,
     }))
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_list_includes_opus_5_5() {
+        let Json(response) = api_get_models().await;
+        assert!(
+            response["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|model| model["id"] == "claude-opus-5-5")
+        );
+    }
 }
 
 // ------------------------------
