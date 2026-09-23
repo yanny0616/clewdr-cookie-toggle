@@ -58,6 +58,7 @@ jobs:
     name: Build binary
     needs: build-frontend
     strategy:
+      fail-fast: false
       matrix:
         os: [linux, musllinux, android, windows, macos]
         target_arch: [x86_64, aarch64]
@@ -182,9 +183,12 @@ jobs:
       - name: Move artifact to work dir and zip
         shell: bash
         run: |
-          mv target/${{ steps.target.outputs.triple }}/release/${{ env.BIN_NAME }} .
+          binary="${{ env.BIN_NAME }}"
+          if [ "${{ matrix.os }}" == "windows" ]; then
+            binary="${binary}.exe"
+          fi
           mkdir -p release-package
-          mv ${{ env.BIN_NAME }} release-package/
+          mv "target/${{ steps.target.outputs.triple }}/release/${binary}" release-package/
           if [ ${{ matrix.os }} == "android" ]; then
             mv ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.target_arch }}-linux-android/libc++_shared.so release-package/
           fi
@@ -210,7 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: master # Ensure we get the latest master with RELEASE_NOTES.md
+          ref: ${{ github.ref }} # Release the exact tagged source and notes
           fetch-depth: 0 # Full history for consistency
 
       - name: Download all artifacts
