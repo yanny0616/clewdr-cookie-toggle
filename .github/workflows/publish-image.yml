@@ -1,0 +1,64 @@
+name: Publish release Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and publish
+        required: true
+        default: v0.13.7
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-image-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish release images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+
+      - name: Verify release source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git describe --tags --exact-match)" = "$RELEASE_TAG"
+          echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          determinate: false
+
+      - name: Build images from the tagged source
+        run: |
+          set -euo pipefail
+          nix build -L -j 2 --no-link .#image-amd64 .#image-arm64
+          {
+            echo "IMAGE_AMD64=$(nix eval --raw .#image-amd64)"
+            echo "IMAGE_ARM64=$(nix eval --raw .#image-arm64)"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish versioned images and multi-arch manifests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" \
+            | nix shell .#crane -c crane auth login ghcr.io \
+                -u "$REGISTRY_USER" --password-stdin
+          nix shell .#crane -c ./publish-images.sh \
+            "$IMAGE" "refs/tags/$RELEASE_TAG" "$RELEASE_SHA" \
+            "$IMAGE_AMD64" "$IMAGE_ARM64"
