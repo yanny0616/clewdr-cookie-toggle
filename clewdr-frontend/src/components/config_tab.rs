@@ -4,11 +4,19 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::{
-    api, i18n::use_i18n, storage,
+    api,
+    i18n::use_i18n,
+    storage,
     types::{ConfigData, RequestParamRule},
 };
 
 #[component]
+// Roughly half of this is a single `view!` template, which reads better whole
+// than split across helpers that each take a dozen signals.
+#[expect(
+    clippy::too_many_lines,
+    reason = "mostly one contiguous view! template"
+)]
 pub fn ConfigTab() -> impl IntoView {
     let i18n = use_i18n();
     let config = RwSignal::new(Option::<ConfigData>::None);
@@ -87,7 +95,7 @@ pub fn ConfigTab() -> impl IntoView {
                 "custom_a" => c.custom_a = if value.is_empty() { None } else { Some(value) },
                 "custom_prompt" => c.custom_prompt = value,
                 "prompt_cache_anchor_models" => {
-                    c.prompt_cache_anchor_models = parse_csv_list(&value)
+                    c.prompt_cache_anchor_models = parse_csv_list(&value);
                 }
                 "prompt_cache_anchor_text" => c.prompt_cache_anchor_text = value,
                 "custom_system" => {

@@ -13,6 +13,7 @@ use crate::{
 };
 
 /// Helper function to format a boolean value as "Enabled" or "Disabled"
+#[must_use]
 pub fn enabled(flag: bool) -> ColoredString {
     if flag {
         "Enabled".green()
@@ -136,6 +137,10 @@ async fn cleanup_request_body_archive(archive_dir: &std::path::Path, limit: usiz
     }
 }
 
+/// Build the shared HTTP client with an optional proxy.
+///
+/// # Errors
+/// Returns an error if the TLS or proxy configuration cannot be initialized.
 pub fn build_http_client(proxy: Option<&Proxy>) -> Result<Client, wreq::Error> {
     let mut builder = Client::builder()
         .cookie_store(true)
@@ -149,6 +154,15 @@ pub fn build_http_client(proxy: Option<&Proxy>) -> Result<Client, wreq::Error> {
 /// Timezone for the API
 pub const TIME_ZONE: &str = "America/New_York";
 
+/// Re-wrap an upstream response as an axum response, preserving status,
+/// headers and the body stream.
+///
+/// # Errors
+/// If the response cannot be assembled from the upstream status and body.
+///
+/// # Panics
+/// If the builder is already in an error state when its headers are taken.
+/// Only the status has been set at that point, so this cannot happen.
 pub fn forward_response(in_: wreq::Response) -> Result<http::Response<Body>, ClewdrError> {
     let status = in_.status();
     let header = in_.headers().to_owned();

@@ -18,6 +18,12 @@ fn default_prompt_cache_anchor_text() -> String {
     "[Start a new Chat]".to_string()
 }
 
+// The bool fields are a flat wire format shared with the frontend. Grouping
+// them into sub-structs, as the lint suggests, would change the JSON schema.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the config API wire format"
+)]
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ConfigApi {
     #[serde(default)]

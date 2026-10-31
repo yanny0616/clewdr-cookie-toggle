@@ -1,3 +1,4 @@
+use anthropic_wire::{CountMessageTokensResponse, CreateMessageParams};
 use axum::{
     Json,
     response::{IntoResponse, Sse, sse::Event as SseEvent},
@@ -7,20 +8,35 @@ use eventsource_stream::Eventsource;
 use futures::TryStreamExt;
 use http::header::{ACCEPT, USER_AGENT};
 use snafu::{GenerateImplicitData, ResultExt};
-use tracing::{Instrument, error, info, warn};
+use tracing::{Instrument, error, info};
 use wreq::Method;
 
 use crate::{
     claude_code_state::{ClaudeCodeState, TokenStatus},
     config::{CLAUDE_CODE_USER_AGENT, CLEWDR_CONFIG, ModelFamily},
     error::{CheckClaudeErr, ClewdrError, WreqSnafu},
-    services::cookie_actor::CookieActorHandle,
-    types::claude::{CountMessageTokensResponse, CreateMessageParams},
+    services::cookie_pool::CookiePool,
 };
 
 pub(super) const CLAUDE_BETA_BASE: &str = "oauth-2025-04-20";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub(super) const CLAUDE_API_VERSION: &str = "2023-06-01";
+
+fn claude_beta_header(client_beta: Option<&str>) -> String {
+    let mut betas = vec![CLAUDE_BETA_BASE];
+    if let Some(client_beta) = client_beta {
+        for beta in client_beta
+            .split(',')
+            .map(str::trim)
+            .filter(|beta| !beta.is_empty())
+        {
+            if !betas.contains(&beta) {
+                betas.push(beta);
+            }
+        }
+    }
+    betas.join(",")
+}
 
 impl ClaudeCodeState {
     /// Attempts to send a chat message to Claude API with retry mechanism
@@ -41,19 +57,27 @@ impl ClaudeCodeState {
     ///
     /// # Returns
     /// * `Result<axum::response::Response, ClewdrError>` - Formatted response or error
+    ///
+    /// # Errors
+    /// [`ClewdrError::TooManyRetries`] once `max_retries` attempts have all
+    /// failed, or any non-retryable error from the attempt itself.
+    ///
+    /// # Panics
+    /// If an attempt fails before a cookie was acquired. Every retry path
+    /// requests a cookie first, so this cannot happen in practice.
     pub async fn try_chat(
         &mut self,
         p: CreateMessageParams,
     ) -> Result<axum::response::Response, ClewdrError> {
-        for i in 0..CLEWDR_CONFIG.load().max_retries + 1 {
+        for i in 0..=CLEWDR_CONFIG.load().max_retries {
             if i > 0 {
                 info!("[RETRY] attempt: {}", i.to_string().green());
             }
             let mut state = self.to_owned();
-            let p = p.to_owned();
+            let p = p.clone();
             let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
-            let cookie = state.request_cookie().await?;
+            let cookie = state.request_cookie()?;
             let retry = async {
                 match state.check_token() {
                     TokenStatus::None => {
@@ -61,26 +85,23 @@ impl ClaudeCodeState {
                         let org = state.get_organization().await?;
                         let code_res = state.exchange_code(&org).await?;
                         state.exchange_token(code_res).await?;
-                        state.return_cookie(None).await;
+                        state.return_cookie(None);
                     }
                     TokenStatus::Expired => {
                         info!("Token expired, refreshing token");
                         state.refresh_token().await?;
-                        state.return_cookie(None).await;
+                        state.return_cookie(None);
                     }
                     TokenStatus::Valid => {
                         info!("Token is valid, proceeding with request");
                     }
                 }
-                let Some(access_token) = state.cookie.as_ref().and_then(|c| c.token.to_owned())
-                else {
+                let Some(access_token) = state.cookie.as_ref().and_then(|c| c.token.clone()) else {
                     return Err(ClewdrError::UnexpectedNone {
                         msg: "No access token found in cookie",
                     });
                 };
-                state
-                    .send_chat(access_token.access_token.to_owned(), p)
-                    .await
+                state.send_chat(access_token.access_token.clone(), p).await
             }
             .instrument(tracing::info_span!(
                 "claude_code",
@@ -103,10 +124,10 @@ impl ClaudeCodeState {
                         if matches!(reason, crate::config::Reason::TooManyRequest(_))
                             && is_fable_request
                         {
-                            state.return_cookie(None).await;
+                            state.return_cookie(None);
                             return Err(ClewdrError::InvalidCookie { reason });
                         }
-                        state.return_cookie(Some(reason.to_owned())).await;
+                        state.return_cookie(Some(reason.clone()));
                         continue;
                     }
                     return Err(e);
@@ -116,14 +137,16 @@ impl ClaudeCodeState {
         Err(ClewdrError::TooManyRetries)
     }
 
+    /// Perform a single (non-retrying) chat request against the Code backend.
+    ///
+    /// # Errors
+    /// Upstream HTTP failures, an expired or rejected token, or a response
+    /// body that cannot be parsed.
     pub async fn send_chat(
         &mut self,
         access_token: String,
-        mut p: CreateMessageParams,
+        p: CreateMessageParams,
     ) -> Result<axum::response::Response, ClewdrError> {
-        if let Some(stripped) = p.model.strip_suffix("-1M") {
-            p.model = stripped.to_string();
-        }
         let model_family = Self::classify_model(&p.model);
         let response = self.execute_claude_request(&access_token, &p).await?;
         self.handle_success_response(response, model_family).await
@@ -134,7 +157,6 @@ impl ClaudeCodeState {
         access_token: &str,
         body: &CreateMessageParams,
     ) -> Result<wreq::Response, ClewdrError> {
-        let beta_header = Self::build_beta_header(self.anthropic_beta_header.as_deref());
         self.client
             .post(
                 self.endpoint
@@ -147,7 +169,10 @@ impl ClaudeCodeState {
             )
             .bearer_auth(access_token)
             .header(USER_AGENT, CLAUDE_CODE_USER_AGENT)
-            .header("anthropic-beta", beta_header)
+            .header(
+                "anthropic-beta",
+                claude_beta_header(self.anthropic_beta.as_deref()),
+            )
             .header("anthropic-version", CLAUDE_API_VERSION)
             .json(body)
             .send()
@@ -159,19 +184,23 @@ impl ClaudeCodeState {
             .await
     }
 
-    async fn persist_count_tokens_allowed(&mut self, value: bool) {
+    fn persist_count_tokens_allowed(&mut self, value: bool) {
         if let Some(cookie) = self.cookie.as_mut() {
             if cookie.count_tokens_allowed == Some(value) {
                 return;
             }
             cookie.set_count_tokens_allowed(Some(value));
             let cloned = cookie.clone();
-            if let Err(err) = self.cookie_actor_handle.return_cookie(cloned, None).await {
-                warn!("Failed to persist count_tokens permission: {}", err);
-            }
+            self.cookie_pool.return_cookie(cloned, None);
         }
     }
 
+    /// Fetch the account's usage metrics, refreshing the OAuth token first if
+    /// it is missing or expired.
+    ///
+    /// # Errors
+    /// Any failure in the token exchange or refresh, an upstream HTTP failure,
+    /// or a response body that is not valid JSON.
     pub async fn fetch_usage_metrics(&mut self) -> Result<serde_json::Value, ClewdrError> {
         match self.check_token() {
             TokenStatus::None => {
@@ -193,7 +222,7 @@ impl ClaudeCodeState {
                 msg: "No access token available",
             })?
             .access_token
-            .to_owned();
+            .clone();
 
         self.client
             .request(Method::GET, CLAUDE_USAGE_URL)
@@ -215,25 +244,34 @@ impl ClaudeCodeState {
             })
     }
 
+    /// Count tokens for `p`, retrying on cookie-level failures.
+    ///
+    /// # Errors
+    /// [`ClewdrError::TooManyRetries`] once `max_retries` attempts have all
+    /// failed, or any non-retryable error from the attempt itself.
+    ///
+    /// # Panics
+    /// If an attempt fails before a cookie was acquired. Every retry path
+    /// requests a cookie first, so this cannot happen in practice.
     pub async fn try_count_tokens(
         &mut self,
         p: CreateMessageParams,
         for_web: bool,
     ) -> Result<axum::response::Response, ClewdrError> {
-        for i in 0..CLEWDR_CONFIG.load().max_retries + 1 {
+        for i in 0..=CLEWDR_CONFIG.load().max_retries {
             if i > 0 {
                 info!("[TOKENS][RETRY] attempt: {}", i.to_string().green());
             }
             let mut state = self.to_owned();
-            let p = p.to_owned();
+            let p = p.clone();
             let is_fable_request = p.model.to_ascii_lowercase().contains("fable");
 
-            let cookie = state.request_cookie().await?;
+            let cookie = state.request_cookie()?;
             let web_attempt_allowed = CLEWDR_CONFIG.load().enable_web_count_tokens;
             let cookie_disallows = matches!(cookie.count_tokens_allowed, Some(false));
             if cookie_disallows || (for_web && !web_attempt_allowed) {
                 if cookie_disallows {
-                    state.persist_count_tokens_allowed(false).await;
+                    state.persist_count_tokens_allowed(false);
                 }
                 return Ok(Self::local_count_tokens_response(&p));
             }
@@ -244,25 +282,24 @@ impl ClaudeCodeState {
                         let org = state.get_organization().await?;
                         let code_res = state.exchange_code(&org).await?;
                         state.exchange_token(code_res).await?;
-                        state.return_cookie(None).await;
+                        state.return_cookie(None);
                     }
                     TokenStatus::Expired => {
                         info!("Token expired, refreshing token");
                         state.refresh_token().await?;
-                        state.return_cookie(None).await;
+                        state.return_cookie(None);
                     }
                     TokenStatus::Valid => {
                         info!("Token is valid, proceeding with count_tokens");
                     }
                 }
-                let Some(access_token) = state.cookie.as_ref().and_then(|c| c.token.to_owned())
-                else {
+                let Some(access_token) = state.cookie.as_ref().and_then(|c| c.token.clone()) else {
                     return Err(ClewdrError::UnexpectedNone {
                         msg: "No access token found in cookie",
                     });
                 };
                 state
-                    .perform_count_tokens(access_token.access_token.to_owned(), p, for_web)
+                    .perform_count_tokens(access_token.access_token.clone(), p, for_web)
                     .await
             }
             .instrument(tracing::info_span!(
@@ -283,10 +320,10 @@ impl ClaudeCodeState {
                         if matches!(reason, crate::config::Reason::TooManyRequest(_))
                             && is_fable_request
                         {
-                            state.return_cookie(None).await;
+                            state.return_cookie(None);
                             return Err(ClewdrError::InvalidCookie { reason });
                         }
-                        state.return_cookie(Some(reason.to_owned())).await;
+                        state.return_cookie(Some(reason.clone()));
                         continue;
                     }
                     return Err(e);
@@ -303,22 +340,19 @@ impl ClaudeCodeState {
         allow_fallback: bool,
     ) -> Result<axum::response::Response, ClewdrError> {
         p.stream = Some(false);
-        if let Some(stripped) = p.model.strip_suffix("-1M") {
-            p.model = stripped.to_string();
-        }
 
         match self
             .execute_claude_count_tokens_request(&access_token, &p)
             .await
         {
             Ok(response) => {
-                self.persist_count_tokens_allowed(true).await;
+                self.persist_count_tokens_allowed(true);
                 let (resp, _) = Self::materialize_non_stream_response(response).await?;
                 Ok(resp)
             }
             Err(err) => {
                 if Self::is_count_tokens_unauthorized(&err) {
-                    self.persist_count_tokens_allowed(false).await;
+                    self.persist_count_tokens_allowed(false);
                     if allow_fallback {
                         return Ok(Self::local_count_tokens_response(&p));
                     }
@@ -333,20 +367,20 @@ impl ClaudeCodeState {
         response: wreq::Response,
         model_family: ModelFamily,
     ) -> Result<axum::response::Response, ClewdrError> {
-        if !self.stream {
+        if self.stream {
+            // Stream pass-through while accumulating output token usage from message_delta events
+            Ok(self.forward_stream_with_usage(response, model_family))
+        } else {
             let (resp, usage_snapshot) = Self::materialize_non_stream_response(response).await?;
             let input = usage_snapshot
                 .input_tokens
-                .unwrap_or(self.usage.input_tokens as u64);
+                .unwrap_or(u64::from(self.usage.input_tokens));
             let output = usage_snapshot.output_tokens.unwrap_or(0);
             self.persist_usage_totals(input, output, model_family).await;
             if let Some(id) = self.request_log_id {
                 crate::services::request_log::record_success(id, usage_snapshot).await;
             }
             Ok(resp)
-        } else {
-            // Stream pass-through while accumulating output token usage from message_delta events
-            return self.forward_stream_with_usage(response, model_family).await;
         }
     }
 
@@ -356,26 +390,24 @@ impl ClaudeCodeState {
         }
         if let Some(cookie) = self.cookie.as_mut() {
             // Lazy boundary refresh if due, then reset period counters and start fresh
-            Self::update_cookie_boundaries_if_due(cookie, &self.cookie_actor_handle).await;
+            Self::update_cookie_boundaries_if_due(cookie, &self.cookie_pool).await;
             cookie.add_and_bucket_usage(input, output, family);
             let cloned = cookie.clone();
-            if let Err(err) = self.cookie_actor_handle.return_cookie(cloned, None).await {
-                warn!("Failed to persist usage statistics: {}", err);
-            }
+            self.cookie_pool.return_cookie(cloned, None);
         }
     }
 
-    async fn forward_stream_with_usage(
+    fn forward_stream_with_usage(
         &mut self,
         response: wreq::Response,
         family: ModelFamily,
-    ) -> Result<axum::response::Response, ClewdrError> {
+    ) -> axum::response::Response {
         let mut state = self.clone();
         let stream = async_stream::try_stream! {
             let upstream = response.bytes_stream().eventsource();
             futures::pin_mut!(upstream);
             let mut usage = crate::services::request_log::UsageSnapshot {
-                input_tokens: Some(state.usage.input_tokens as u64),
+                input_tokens: Some(u64::from(state.usage.input_tokens)),
                 ..Default::default()
             };
             let mut stopped = false;
@@ -387,10 +419,10 @@ impl ClaudeCodeState {
                     let snapshot = value.get("usage").or_else(|| value.get("message").and_then(|m| m.get("usage")));
                     if let Some(snapshot) = snapshot {
                         // Claude usage counters are cumulative, not deltas.
-                        if let Some(v) = snapshot.get("input_tokens").and_then(|v| v.as_u64()) { usage.input_tokens = Some(v); }
-                        if let Some(v) = snapshot.get("output_tokens").and_then(|v| v.as_u64()) { usage.output_tokens = Some(v); }
-                        if let Some(v) = snapshot.get("cache_creation_input_tokens").and_then(|v| v.as_u64()) { usage.cache_creation_input_tokens = Some(v); }
-                        if let Some(v) = snapshot.get("cache_read_input_tokens").and_then(|v| v.as_u64()) { usage.cache_read_input_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("input_tokens").and_then(serde_json::Value::as_u64) { usage.input_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("output_tokens").and_then(serde_json::Value::as_u64) { usage.output_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("cache_creation_input_tokens").and_then(serde_json::Value::as_u64) { usage.cache_creation_input_tokens = Some(v); }
+                        if let Some(v) = snapshot.get("cache_read_input_tokens").and_then(serde_json::Value::as_u64) { usage.cache_read_input_tokens = Some(v); }
                     }
                     stopped |= value.get("type").and_then(|v| v.as_str()) == Some("message_stop");
                 }
@@ -409,9 +441,9 @@ impl ClaudeCodeState {
             }
         };
         let stream = stream.map_err(|e: std::io::Error| -> axum::BoxError { e.into() });
-        Ok(Sse::new(stream)
-            .keep_alive(Default::default())
-            .into_response())
+        Sse::new(stream)
+            .keep_alive(axum::response::sse::KeepAlive::default())
+            .into_response()
     }
 
     async fn materialize_non_stream_response(
@@ -431,7 +463,7 @@ impl ClaudeCodeState {
         let usage = Self::extract_usage_from_bytes(&bytes).unwrap_or_default();
 
         let mut builder = http::Response::builder().status(status);
-        for (key, value) in headers.iter() {
+        for (key, value) in &headers {
             builder = builder.header(key, value);
         }
         let response =
@@ -460,9 +492,9 @@ impl ClaudeCodeState {
 
             // Fallback: estimate output tokens from the Claude response content
             if let Ok(parsed) =
-                serde_json::from_value::<crate::types::claude::CreateMessageResponse>(value)
+                serde_json::from_value::<anthropic_wire::CreateMessageResponse>(value)
             {
-                snapshot.output_tokens = Some(parsed.count_tokens() as u64);
+                snapshot.output_tokens = Some(u64::from(parsed.count_tokens()));
                 return Some(snapshot);
             }
         }
@@ -474,7 +506,6 @@ impl ClaudeCodeState {
         access_token: &str,
         body: &CreateMessageParams,
     ) -> Result<wreq::Response, ClewdrError> {
-        let beta_header = Self::build_beta_header(self.anthropic_beta_header.as_deref());
         self.client
             .post(
                 self.endpoint
@@ -487,7 +518,10 @@ impl ClaudeCodeState {
             )
             .bearer_auth(access_token)
             .header(USER_AGENT, CLAUDE_CODE_USER_AGENT)
-            .header("anthropic-beta", beta_header)
+            .header(
+                "anthropic-beta",
+                claude_beta_header(self.anthropic_beta.as_deref()),
+            )
             .header("anthropic-version", CLAUDE_API_VERSION)
             .json(body)
             .send()
@@ -497,19 +531,6 @@ impl ClaudeCodeState {
             })?
             .check_claude()
             .await
-    }
-
-    fn build_beta_header(extra: Option<&str>) -> String {
-        let mut parts = vec![CLAUDE_BETA_BASE.to_string()];
-        if let Some(extra) = extra {
-            for token in extra.split(',') {
-                let t = token.trim();
-                if !t.is_empty() {
-                    parts.push(t.to_string());
-                }
-            }
-        }
-        parts.join(",")
     }
 
     fn classify_model(model: &str) -> ModelFamily {
@@ -528,15 +549,16 @@ impl ClaudeCodeState {
     // ---------------------------------------------
     async fn update_cookie_boundaries_if_due(
         cookie: &mut crate::config::CookieStatus,
-        handle: &crate::services::cookie_actor::CookieActorHandle,
+        handle: &crate::services::cookie_pool::CookiePool,
     ) {
-        let now = chrono::Utc::now().timestamp();
         const SESSION_WINDOW_SECS: i64 = 5 * 60 * 60; // 5h
         const WEEKLY_WINDOW_SECS: i64 = 7 * 24 * 60 * 60; // 7d
 
+        let now = chrono::Utc::now().timestamp();
+
         let tracked = |flag: Option<bool>| flag == Some(true);
         let unknown = |flag: Option<bool>| flag.is_none();
-        let due = |ts: Option<i64>| ts.map(|t| now >= t).unwrap_or(false);
+        let due = |ts: Option<i64>| ts.is_some_and(|t| now >= t);
 
         let session_tracked = tracked(cookie.session_has_reset);
         let weekly_tracked = tracked(cookie.weekly_has_reset);
@@ -624,11 +646,11 @@ impl ClaudeCodeState {
 
     async fn fetch_usage_resets(
         cookie: &mut crate::config::CookieStatus,
-        handle: &CookieActorHandle,
+        handle: &CookiePool,
     ) -> Option<(Option<i64>, Option<i64>, Option<i64>)> {
         let mut state = ClaudeCodeState::from_cookie(handle.clone(), cookie.clone()).ok()?;
         let usage = state.fetch_usage_metrics().await.ok()?;
-        state.return_cookie(None).await;
+        state.return_cookie(None);
         if let Some(updated) = state.cookie.clone() {
             *cookie = updated;
         }

@@ -5,7 +5,7 @@ mod usage;
 pub use config::{ConfigApi, RequestParamRule};
 pub use reason::Reason;
 use serde::{Deserialize, Serialize};
-pub use usage::UsageBreakdown;
+pub use usage::{UsageBreakdown, UsageFamily};
 
 fn default_enabled() -> bool {
     true

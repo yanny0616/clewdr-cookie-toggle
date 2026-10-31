@@ -1,13 +1,11 @@
 use std::{collections::VecDeque, sync::LazyLock};
 
+use anthropic_wire::{CreateMessageParams, MessageContent, Tool};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::error;
 
-use crate::{
-    config::{CLEWDR_CONFIG, LOG_DIR},
-    types::claude::{CreateMessageParams, MessageContent, Tool},
-};
+use crate::config::{CLEWDR_CONFIG, LOG_DIR};
 
 const MAX_LOGS: usize = 500;
 const REQUEST_LOG_FILE: &str = "api_request_logs.json";
@@ -81,7 +79,7 @@ pub async fn record_start(
         model: params.model.clone(),
         stream: params.stream.unwrap_or(false),
         message_count: params.messages.len(),
-        tool_count: params.tools.as_ref().map(|tools| tools.len()).unwrap_or(0),
+        tool_count: params.tools.as_ref().map_or(0, std::vec::Vec::len),
         cache_control_breakpoints: count_cache_control_breakpoints(params),
         estimated_context_tokens: params.count_tokens(),
         status: RequestLogStatus::Pending,
@@ -222,6 +220,10 @@ pub async fn finish(id: u64, status: RequestLogStatus, code: Option<&str>, error
 
 /// The deadline includes authentication, retries and response delivery, so retries
 /// cannot multiply the timeout beyond the reverse proxy's waiting budget.
+/// Track response completion, cancellation and timeout.
+///
+/// # Errors
+/// Propagates request failures and reports requests exceeding the configured deadline.
 pub async fn track_response(
     guard: RequestGuard,
     request: impl std::future::Future<
@@ -243,8 +245,9 @@ async fn track_response_with_timeout(
     >,
     timeout: std::time::Duration,
 ) -> Result<axum::response::Response, crate::error::ClewdrError> {
-    use crate::error::ClewdrError;
     use futures::StreamExt;
+
+    use crate::error::ClewdrError;
     let seconds = timeout.as_secs();
     let deadline = tokio::time::Instant::now() + timeout;
     let id = guard.0;
@@ -342,16 +345,12 @@ fn count_cache_control_breakpoints(params: &CreateMessageParams) -> usize {
                 .count(),
         })
         .sum::<usize>();
-    let tool_count = params
-        .tools
-        .as_ref()
-        .map(|tools| {
-            tools
-                .iter()
-                .filter(|tool| tool_has_cache_control(tool))
-                .count()
-        })
-        .unwrap_or(0);
+    let tool_count = params.tools.as_ref().map_or(0, |tools| {
+        tools
+            .iter()
+            .filter(|tool| tool_has_cache_control(tool))
+            .count()
+    });
     system_count + message_count + tool_count
 }
 
@@ -361,10 +360,10 @@ fn count_cache_controls_in_value(value: Option<&serde_json::Value>) -> usize {
             .iter()
             .filter(|item| item.get("cache_control").is_some_and(|v| !v.is_null()))
             .count(),
-        Some(serde_json::Value::Object(obj)) => {
+        Some(serde_json::Value::Object(obj)) => usize::from(
             obj.get("cache_control")
-                .is_some_and(|value| !value.is_null()) as usize
-        }
+                .is_some_and(|value| !value.is_null()),
+        ),
         _ => 0,
     }
 }
@@ -388,6 +387,7 @@ fn extract_error_code(error: &str) -> Option<String> {
     None
 }
 
+#[must_use]
 pub fn usage_from_value(value: &serde_json::Value) -> UsageSnapshot {
     let Some(usage) = value.get("usage") else {
         return UsageSnapshot::default();
@@ -401,19 +401,22 @@ pub fn usage_from_value(value: &serde_json::Value) -> UsageSnapshot {
 }
 
 fn number(value: &serde_json::Value, key: &str) -> Option<u64> {
-    value
-        .get(key)
-        .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|n| n.max(0) as u64)))
+    value.get(key).and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_i64().map(|n| n.max(0).cast_unsigned()))
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use axum::{
         body::{Body, to_bytes},
         response::{IntoResponse, Response},
     };
-    use std::time::Duration;
+
+    use super::*;
 
     async fn start() -> u64 {
         let params = serde_json::from_value(serde_json::json!({

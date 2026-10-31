@@ -1,10 +1,9 @@
+use anthropic_wire::{ContentBlockDelta, CreateMessageResponse, StopReason, StreamEvent};
 use async_stream::try_stream;
 use axum::response::sse::Event;
 use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
-
-use crate::types::claude::{ContentBlockDelta, CreateMessageResponse, StreamEvent};
 
 /// Represents the data structure for streaming events in OpenAI API format
 /// Contains a choices array with deltas of content
@@ -86,60 +85,60 @@ where
     I: Stream<Item = Result<eventsource_stream::Event, E>>,
 {
     try_stream! {
-        futures::pin_mut!(s);
-        let mut finish_reason = "stop";
-        let mut sent_terminal = false;
+            futures::pin_mut!(s);
+            let mut finish_reason = "stop";
+            let mut sent_terminal = false;
 
-        while let Some(event) = s.next().await {
-            let event = event?;
-            let Ok(parsed) = serde_json::from_str::<StreamEvent>(&event.data) else {
-                continue;
-            };
-            match parsed {
-                StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    ContentBlockDelta::TextDelta { text } => {
-                        yield build_event(EventContent::Content { content: text });
+            while let Some(event) = s.next().await {
+                let event = event?;
+                let Ok(parsed) = serde_json::from_str::<StreamEvent>(&event.data) else {
+                    continue;
+                };
+                match parsed {
+                    StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                        ContentBlockDelta::TextDelta { text } => {
+                            yield build_event(EventContent::Content { content: text });
+                        }
+                        ContentBlockDelta::ThinkingDelta { thinking } => {
+                            yield build_event(EventContent::Reasoning {
+                                reasoning_content: thinking,
+                            });
+                        }
+                        _ => {}
+                    },
+                    StreamEvent::MessageDelta { delta, .. } => {
+                        finish_reason = match delta.stop_reason {
+                            Some(anthropic_wire::StopReason::MaxTokens |
+    anthropic_wire::StopReason::ModelContextWindowExceeded) => "length",
+                            Some(anthropic_wire::StopReason::ToolUse) => "tool_calls",
+                            Some(anthropic_wire::StopReason::Refusal) => "content_filter",
+                            _ => "stop",
+                        };
                     }
-                    ContentBlockDelta::ThinkingDelta { thinking } => {
-                        yield build_event(EventContent::Reasoning {
-                            reasoning_content: thinking,
-                        });
+                    StreamEvent::MessageStop => {
+                        yield Event::default().json_data(StreamEventData::finished(finish_reason)).unwrap();
+                        yield Event::default().data("[DONE]");
+                        sent_terminal = true;
                     }
                     _ => {}
-                },
-                StreamEvent::MessageDelta { delta, .. } => {
-                    finish_reason = match delta.stop_reason {
-                        Some(crate::types::claude::StopReason::MaxTokens)
-                        | Some(crate::types::claude::StopReason::ModelContextWindowExceeded) => "length",
-                        Some(crate::types::claude::StopReason::ToolUse) => "tool_calls",
-                        Some(crate::types::claude::StopReason::Refusal) => "content_filter",
-                        _ => "stop",
-                    };
                 }
-                StreamEvent::MessageStop => {
-                    yield Event::default().json_data(StreamEventData::finished(finish_reason)).unwrap();
-                    yield Event::default().data("[DONE]");
-                    sent_terminal = true;
-                }
-                _ => {}
+            }
+
+            // Some Claude Web streams close without a native message_stop event.
+            // Still terminate the OpenAI-compatible stream explicitly on clean EOF.
+            if !sent_terminal {
+                yield Event::default().json_data(StreamEventData::finished(finish_reason)).unwrap();
+                yield Event::default().data("[DONE]");
             }
         }
-
-        // Some Claude Web streams close without a native message_stop event.
-        // Still terminate the OpenAI-compatible stream explicitly on clean EOF.
-        if !sent_terminal {
-            yield Event::default().json_data(StreamEventData::finished(finish_reason)).unwrap();
-            yield Event::default().data("[DONE]");
-        }
-    }
 }
 
-pub fn transforms_json(input: CreateMessageResponse) -> Value {
+pub fn transforms_json(input: &CreateMessageResponse) -> Value {
     let content = input
         .content
         .iter()
         .filter_map(|block| match block {
-            crate::types::claude::ContentBlock::Text { text, .. } => Some(text.clone()),
+            anthropic_wire::ContentBlock::Text { text, .. } => Some(text.clone()),
             _ => None,
         })
         .collect::<String>();
@@ -153,14 +152,12 @@ pub fn transforms_json(input: CreateMessageResponse) -> Value {
     });
 
     let finish_reason = match input.stop_reason {
-        Some(crate::types::claude::StopReason::EndTurn) => "stop",
-        Some(crate::types::claude::StopReason::MaxTokens) => "length",
-        Some(crate::types::claude::StopReason::StopSequence) => "stop",
-        Some(crate::types::claude::StopReason::ToolUse) => "tool_calls",
-        Some(crate::types::claude::StopReason::PauseTurn) => "stop",
-        Some(crate::types::claude::StopReason::Refusal) => "content_filter",
-        Some(crate::types::claude::StopReason::ModelContextWindowExceeded) => "length",
-        None => "stop",
+        Some(StopReason::MaxTokens | StopReason::ModelContextWindowExceeded) => "length",
+        Some(StopReason::ToolUse) => "tool_calls",
+        Some(StopReason::Refusal) => "content_filter",
+        Some(StopReason::EndTurn | StopReason::StopSequence | StopReason::PauseTurn) | None => {
+            "stop"
+        }
     };
 
     serde_json::json!({

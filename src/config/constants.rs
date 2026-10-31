@@ -19,7 +19,7 @@ pub const CC_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 pub const CC_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
 pub const CC_REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
 pub const CLAUDE_CODE_VERSION: &str = "2.1.280";
-pub const CLAUDE_CODE_USER_AGENT: &str = const_format::concatcp!("claude-code/", CLAUDE_CODE_VERSION);
+pub const CLAUDE_CODE_USER_AGENT: &str = "claude-code/2.1.280";
 pub const CLAUDE_CODE_BILLING_SALT: &str = "59cf53e54c78";
 
 pub static ENDPOINT_URL: LazyLock<Url> = LazyLock::new(|| {
@@ -96,15 +96,18 @@ static PORTABLE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 ///
 /// # Returns
 /// * `usize` - The default value of 5
+#[must_use]
 pub const fn default_max_retries() -> usize {
     5
 }
 
 /// Default number of archived request body dumps to keep.
+#[must_use]
 pub const fn default_request_body_archive_limit() -> usize {
     50
 }
 
+#[must_use]
 pub fn default_prompt_cache_anchor_text() -> String {
     "[Start a new Chat]".to_string()
 }
@@ -113,14 +116,16 @@ pub fn default_prompt_cache_anchor_text() -> String {
 ///
 /// # Returns
 /// * `String` - The default localhost IP "127.0.0.1"
+#[must_use]
 pub fn default_ip() -> IpAddr {
-    Ipv4Addr::new(127, 0, 0, 1).into()
+    Ipv4Addr::LOCALHOST.into()
 }
 
 /// Default port for the server to listen on
 ///
 /// # Returns
 /// * `u16` - The default port number 8484
+#[must_use]
 pub fn default_port() -> u16 {
     8484
 }
@@ -129,6 +134,7 @@ pub fn default_port() -> u16 {
 ///
 /// # Returns
 /// * `bool` - The default value of true
+#[must_use]
 pub const fn default_use_real_roles() -> bool {
     true
 }
@@ -137,6 +143,7 @@ pub const fn default_use_real_roles() -> bool {
 ///
 /// # Returns
 /// * `bool` - The default value of true
+#[must_use]
 pub const fn default_check_update() -> bool {
     true
 }
@@ -144,6 +151,7 @@ pub const fn default_check_update() -> bool {
 ///
 /// # Returns
 /// * `bool` - The default value of true
+#[must_use]
 pub const fn default_skip_cool_down() -> bool {
     true
 }

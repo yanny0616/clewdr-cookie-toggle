@@ -93,7 +93,7 @@ impl Summary {
         if self.duration_count == 0 {
             "—".into()
         } else {
-            fmt_duration(self.duration_sum / self.duration_count as i64)
+            fmt_duration(self.duration_sum / i64::try_from(self.duration_count).unwrap_or(i64::MAX))
         }
     }
 
@@ -103,6 +103,10 @@ impl Summary {
 }
 
 #[component]
+#[expect(
+    clippy::too_many_lines,
+    reason = "declarative request-log view and its reactive controls form one component"
+)]
 pub fn RequestLogsTab() -> impl IntoView {
     let i18n = use_i18n();
     let logs = RwSignal::new(Vec::<ApiRequestLog>::new());
@@ -116,7 +120,7 @@ pub fn RequestLogsTab() -> impl IntoView {
     let confirm_clear = RwSignal::new(false);
     let auto_refresh = RwSignal::new(storage::get(AUTO_REFRESH_KEY).as_deref() != Some("off"));
     let last_updated = RwSignal::new(Option::<i64>::None);
-    let now = RwSignal::new(js_sys::Date::now() as i64);
+    let now = RwSignal::new(browser_now_millis());
 
     let load = move || {
         if loading.get_untracked() {
@@ -128,7 +132,7 @@ pub fn RequestLogsTab() -> impl IntoView {
                 Ok(items) => {
                     let _ = logs.try_set(items);
                     let _ = error.try_set(None);
-                    let _ = last_updated.try_set(Some(js_sys::Date::now() as i64));
+                    let _ = last_updated.try_set(Some(browser_now_millis()));
                 }
                 Err(err) => {
                     let _ = error.try_set(Some(err));
@@ -139,7 +143,7 @@ pub fn RequestLogsTab() -> impl IntoView {
     };
     load();
 
-    let clock = Interval::new(1000, move || now.set(js_sys::Date::now() as i64));
+    let clock = Interval::new(1000, move || now.set(browser_now_millis()));
     let refresh = Interval::new(REFRESH_MS, move || {
         // Skip polling while the page is off-screen or the user paused it.
         if auto_refresh.get_untracked() && !document_hidden() {
@@ -155,7 +159,9 @@ pub fn RequestLogsTab() -> impl IntoView {
         })
     });
     let failure_counts = Memo::new(move |_| {
-        logs.with(|all| FAILURE_KINDS.map(|kind| (kind, all.iter().filter(|l| l.status == kind).count())))
+        logs.with(|all| {
+            FAILURE_KINDS.map(|kind| (kind, all.iter().filter(|l| l.status == kind).count()))
+        })
     });
     let models = Memo::new(move |_| {
         let mut map = BTreeMap::<String, usize>::new();
@@ -321,7 +327,7 @@ pub fn RequestLogsTab() -> impl IntoView {
             </Show>
 
             <div class="log-list">
-                <Show when=move || filtered.with(|l| l.is_empty())>
+                <Show when=move || filtered.with(std::vec::Vec::is_empty)>
                     <div class="log-empty">{move || i18n.t("logs.empty")}</div>
                 </Show>
                 <For each=move || visible.get() key=|l| l.id children=move |log| {
@@ -335,7 +341,7 @@ pub fn RequestLogsTab() -> impl IntoView {
                 } />
                 <Show when=move || { filtered.with(|l| l.len() > shown.get()) }>
                     <div class="log-more">
-                        <span>{move || i18n.tf("logs.showing", &[("shown", &visible.with(|v| v.len()).to_string()), ("total", &filtered.with(|f| f.len()).to_string())])}</span>
+                        <span>{move || i18n.tf("logs.showing", &[("shown", &visible.with(std::vec::Vec::len).to_string()), ("total", &filtered.with(std::vec::Vec::len).to_string())])}</span>
                         <button class="btn btn-ghost btn-sm" on:click=move |_| shown.update(|s| *s += PAGE_SIZE)>
                             {move || i18n.tf("logs.loadMore", &[("count", &PAGE_SIZE.to_string())])}
                         </button>
@@ -398,7 +404,7 @@ fn RequestLogRow(entry: Memo<ApiRequestLog>, now: RwSignal<i64>) -> impl IntoVie
                             </span>
                             <span class="log-entry-duration">{move || {
                                 let ms = if pending { Some(now.get().saturating_sub(ts)) } else { duration };
-                                ms.map(fmt_duration).unwrap_or_else(|| "—".into())
+                                ms.map_or_else(|| "—".into(), fmt_duration)
                             }}</span>
                             <span class="log-entry-time" title=fmt_full(ts)>{move || {
                                 let n = now.get();
@@ -439,7 +445,7 @@ fn RequestLogRow(entry: Memo<ApiRequestLog>, now: RwSignal<i64>) -> impl IntoVie
                     view! {
                         <dl class="log-metrics">
                             <div><dt>{i18n.t("logs.metrics.started")}</dt><dd>{fmt_full(log.timestamp_ms)}</dd></div>
-                            <div><dt>{i18n.t("logs.metrics.duration")}</dt><dd>{log.duration_ms.map(fmt_duration).unwrap_or_else(|| "—".into())}</dd></div>
+                            <div><dt>{i18n.t("logs.metrics.duration")}</dt><dd>{log.duration_ms.map_or_else(|| "—".into(), fmt_duration)}</dd></div>
                             <div><dt>{i18n.t("logs.metrics.source")}</dt><dd>{source}</dd></div>
                             <div><dt>{i18n.t("logs.metrics.messages")}</dt><dd>{format!("{} / {}", log.message_count, log.tool_count)}</dd></div>
                             <div><dt>{i18n.t("logs.metrics.input")}</dt><dd>{fmt_opt(input)}</dd></div>
@@ -447,7 +453,7 @@ fn RequestLogRow(entry: Memo<ApiRequestLog>, now: RwSignal<i64>) -> impl IntoVie
                             <div><dt>{i18n.t("logs.metrics.cacheWrite")}</dt><dd>{fmt_opt(log.cache_creation_input_tokens)}</dd></div>
                             <div><dt>{i18n.t("logs.metrics.cacheRead")}</dt><dd>{fmt_opt(log.cache_read_input_tokens)}<small>{cache_pct}</small></dd></div>
                             <div><dt>{i18n.t("logs.metrics.breakpoints")}</dt><dd>{log.cache_control_breakpoints}</dd></div>
-                            <div><dt>{i18n.t("logs.metrics.estimated")}</dt><dd>{fmt_int(log.estimated_context_tokens as u64)}</dd></div>
+                            <div><dt>{i18n.t("logs.metrics.estimated")}</dt><dd>{fmt_int(u64::from(log.estimated_context_tokens))}</dd></div>
                             <div><dt>{i18n.t("logs.metrics.errorCode")}</dt><dd>{log.error_code.clone().unwrap_or_else(|| "—".into())}</dd></div>
                             <div><dt>"ID"</dt><dd>{format!("#{}", log.id)}</dd></div>
                         </dl>
@@ -502,8 +508,7 @@ fn status_kind(status: &str) -> &'static str {
 fn document_hidden() -> bool {
     web_sys::window()
         .and_then(|w| w.document())
-        .map(|d| d.hidden())
-        .unwrap_or(false)
+        .is_some_and(|d| d.hidden())
 }
 
 fn set_all_open(open: bool) {
@@ -514,7 +519,10 @@ fn set_all_open(open: bool) {
         return;
     };
     for i in 0..list.length() {
-        if let Some(el) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
+        if let Some(el) = list
+            .item(i)
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+        {
             let _ = if open {
                 el.set_attribute("open", "")
             } else {
@@ -528,7 +536,7 @@ fn fmt_int(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -537,9 +545,13 @@ fn fmt_int(value: u64) -> String {
 }
 
 fn fmt_opt(value: Option<u64>) -> String {
-    value.map(fmt_int).unwrap_or_else(|| "—".into())
+    value.map_or_else(|| "—".into(), fmt_int)
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "display-only rounding of counters and JavaScript date conversion"
+)]
 fn fmt_compact(value: u64) -> String {
     if value >= 1_000_000 {
         format!("{:.1}M", value as f64 / 1e6)
@@ -550,6 +562,10 @@ fn fmt_compact(value: u64) -> String {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "display-only rounding of counters and JavaScript date conversion"
+)]
 fn fmt_pct(num: u64, den: u64) -> String {
     if den == 0 {
         "—".into()
@@ -558,6 +574,10 @@ fn fmt_pct(num: u64, den: u64) -> String {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "display-only rounding of counters and JavaScript date conversion"
+)]
 fn fmt_duration(ms: i64) -> String {
     let ms = ms.max(0);
     if ms < 1000 {
@@ -569,6 +589,10 @@ fn fmt_duration(ms: i64) -> String {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "display-only rounding of counters and JavaScript date conversion"
+)]
 fn js_date(ts_ms: i64) -> js_sys::Date {
     js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts_ms as f64))
 }
@@ -619,4 +643,12 @@ fn fmt_relative(i18n: I18n, ts_ms: i64, now_ms: i64) -> Option<String> {
     } else {
         None
     }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "JavaScript dates use integral milliseconds within i64 range"
+)]
+fn browser_now_millis() -> i64 {
+    js_sys::Date::now() as i64
 }
